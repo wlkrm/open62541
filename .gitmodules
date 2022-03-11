@@ -5,3 +5,6 @@
 	path = deps/ua-nodeset
 	url = https://github.com/OPCFoundation/UA-Nodeset
 	branch = v1.04
+[submodule "deps/libxml2"]
+	path = deps/libxml2
+	url = https://gitlab.gnome.org/GNOME/libxml2.git
