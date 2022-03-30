@@ -4,6 +4,7 @@
  *
  *    Copyright 2014-2018 (c) Fraunhofer IOSB (Author: Julius Pfrommer)
  *    Copyright 2018 (c) Fraunhofer IOSB (Author: Lukas Meling)
+ *    Copyright (c) 2022 ISW (for umati and VDW e.V.) (Author: Moritz Walker)
  */
 
 #include <open62541/config.h>
@@ -1078,10 +1079,11 @@ ENCODE_JSON(Variant) {
     const bool isArray = src->arrayLength > 0 || src->data <= UA_EMPTY_ARRAY_SENTINEL;
     const bool hasDimensions = isArray && src->arrayDimensionsSize > 0;
 
-    status ret = writeJsonObjStart(ctx);
+    status ret = UA_STATUSCODE_GOOD;
 
     if(ctx->useReversible) {
         /* Write the NodeId */
+        ret = writeJsonObjStart(ctx);
         UA_UInt32 typeId = src->type->typeId.identifier.numeric;
         if(!isBuiltin)
             typeId = UA_TYPES[UA_TYPES_EXTENSIONOBJECT].typeId.identifier.numeric;
@@ -1109,6 +1111,7 @@ ENCODE_JSON(Variant) {
             ret |= encodeJsonArray(ctx, src->arrayDimensions, src->arrayDimensionsSize, 
                                    &UA_TYPES[UA_TYPES_INT32]);
         }
+        ret |= writeJsonObjEnd(ctx);
     } else {
         /* Non-Reversible form. Variant values encoded as a JSON object
          * containing only the value of the Body field. The Type and Dimensions
@@ -1118,13 +1121,13 @@ ENCODE_JSON(Variant) {
             /* Not builtin. Can it be encoded? Wrap in extension object. */
             if(src->arrayDimensionsSize > 1)
                 return UA_STATUSCODE_BADNOTIMPLEMENTED;
-            ret |= writeJsonKey(ctx, UA_JSONKEY_BODY);
+            // ret |= writeJsonKey(ctx, UA_JSONKEY_BODY);
             ret |= Variant_encodeJsonWrapExtensionObject(src, isArray, ctx);
         } else if(!isArray) {
-            ret |= writeJsonKey(ctx, UA_JSONKEY_BODY);
+            // ret |= writeJsonKey(ctx, UA_JSONKEY_BODY);
             ret |= encodeJsonInternal(src->data, src->type, ctx);
         } else {
-            ret |= writeJsonKey(ctx, UA_JSONKEY_BODY);
+            // ret |= writeJsonKey(ctx, UA_JSONKEY_BODY);
             if(src->arrayDimensionsSize > 1) {
                 size_t index = 0;
                 size_t dimensionIndex = 0;
@@ -1137,7 +1140,6 @@ ENCODE_JSON(Variant) {
         }
     }
 
-    ret |= writeJsonObjEnd(ctx);
     return ret;
 }
 

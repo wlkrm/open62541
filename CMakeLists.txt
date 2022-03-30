@@ -1096,7 +1096,8 @@ endif()
 
 if(UA_ENABLE_JSON_ENCODING)
     if(UA_ENABLE_PUBSUB)
-        list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_networkmessage_json.c)
+        list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_networkmessage_json.c
+                                ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_datasetmetadata_json.c)
     endif()
     list(APPEND internal_headers ${PROJECT_SOURCE_DIR}/deps/jsmn/jsmn.h
                                  ${PROJECT_SOURCE_DIR}/deps/string_escape.h

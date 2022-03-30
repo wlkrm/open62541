@@ -8,6 +8,7 @@
  * Copyright (c) 2020 Yannick Wallerer, Siemens AG
  * Copyright (c) 2020 Thomas Fischer, Siemens AG
  * Copyright (c) 2021 Fraunhofer IOSB (Author: Jan Hermes)
+ * Copyright (c) 2022 ISW (for umati and VDW e.V.) (Author: Moritz Walker)
  */
 
 #include <open62541/server_pubsub.h>
@@ -744,8 +745,9 @@ encodeNetworkMessage(UA_WriterGroup *wg, UA_NetworkMessage *nm,
 #ifdef UA_ENABLE_JSON_ENCODING
 static UA_StatusCode
 sendNetworkMessageJson(UA_PubSubConnection *connection, UA_DataSetMessage *dsm,
-                       UA_UInt16 *writerIds, UA_Byte dsmCount,
-                       UA_ExtensionObject *transportSettings) {
+                       UA_UInt16 *writerIds, UA_String *writerNames, UA_Byte dsmCount,
+                       UA_ExtensionObject *transportSettings,
+                       UA_DataSetFieldContentMask *dsfConfigMask) {
     /* Prepare the NetworkMessage */
     UA_NetworkMessage nm;
     memset(&nm, 0, sizeof(UA_NetworkMessage));
@@ -754,7 +756,56 @@ sendNetworkMessageJson(UA_PubSubConnection *connection, UA_DataSetMessage *dsm,
     nm.payloadHeaderEnabled = true;
     nm.payloadHeader.dataSetPayloadHeader.count = dsmCount;
     nm.payloadHeader.dataSetPayloadHeader.dataSetWriterIds = writerIds;
+    nm.payloadHeader.dataSetPayloadHeader.dataSetWriterNames = writerNames;
     nm.payload.dataSetPayload.dataSetMessages = dsm;
+
+    /* Compute the message length */
+    UA_Boolean reversibleEncoding = 
+        !(UA_Boolean)(*dsfConfigMask & UA_DATASETFIELDCONTENTMASK_RAWDATA);
+    size_t msgSize = UA_NetworkMessage_calcSizeJson(&nm, NULL, 0, NULL, 0, reversibleEncoding);
+
+    /* Allocate the buffer. Allocate on the stack if the buffer is small. */
+    UA_ByteString buf;
+    UA_Byte stackBuf[UA_MAX_STACKBUF];
+    buf.data = stackBuf;
+    buf.length = msgSize;
+    UA_StatusCode res = UA_STATUSCODE_GOOD;
+    if(msgSize > UA_MAX_STACKBUF) {
+        res = UA_ByteString_allocBuffer(&buf, msgSize);
+        if(res != UA_STATUSCODE_GOOD)
+            return res;
+    }
+
+    /* Encode the message */
+    UA_Byte *bufPos = buf.data;
+    const UA_Byte *bufEnd = &buf.data[msgSize];
+    res = UA_NetworkMessage_encodeJson(&nm, &bufPos, &bufEnd, NULL, 0, NULL, 0, reversibleEncoding);       
+    if(res != UA_STATUSCODE_GOOD)
+        goto cleanup;
+    UA_assert(bufPos == bufEnd);
+
+    /* Send the prepared messages */
+    res = connection->channel->send(connection->channel, transportSettings, &buf);
+
+ cleanup:
+    if(msgSize > UA_MAX_STACKBUF)
+        UA_ByteString_clear(&buf);
+    return res;
+}
+
+UA_StatusCode
+sendNetworkMessageMetadataJson(UA_PubSubConnection *connection, 
+                               UA_DataSetMetaData *dsmd,
+                               UA_UInt16 *writerIds, 
+                               UA_Byte dsmdCount,
+                               UA_ExtensionObject *dataSetWriterTransportSettings) {
+    /* Prepare the NetworkMessage */
+    UA_NetworkMessage nm;
+    memset(&nm, 0, sizeof(UA_NetworkMessage));
+    nm.version = 1;
+    nm.networkMessageType = UA_NETWORKMESSAGE_DATASETMETADATA;
+    nm.payloadHeaderEnabled = true;
+    nm.payload.metaDataPayload.dataSetMetaData = dsmd;
 
     /* Compute the message length */
     size_t msgSize = UA_NetworkMessage_calcSizeJson(&nm, NULL, 0, NULL, 0, true);
@@ -779,8 +830,13 @@ sendNetworkMessageJson(UA_PubSubConnection *connection, UA_DataSetMessage *dsm,
         goto cleanup;
     UA_assert(bufPos == bufEnd);
 
+    UA_ExtensionObject newTransport;
+    UA_ExtensionObject_copy(dataSetWriterTransportSettings, &newTransport);
+    UA_BrokerDataSetWriterTransportDataType* transportSettings = 
+        (UA_BrokerDataSetWriterTransportDataType*) newTransport.content.decoded.data;
+    transportSettings->queueName = transportSettings->metaDataQueueName;
     /* Send the prepared messages */
-    res = connection->channel->send(connection->channel, transportSettings, &buf);
+    res = connection->channel->send(connection->channel, &newTransport, &buf);
 
  cleanup:
     if(msgSize > UA_MAX_STACKBUF)
@@ -1025,6 +1081,8 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
     UA_StatusCode res = UA_STATUSCODE_GOOD;
     UA_STACKARRAY(UA_UInt16, dsWriterIds, writerGroup->writersCount);
     UA_STACKARRAY(UA_DataSetMessage, dsmStore, writerGroup->writersCount);
+    UA_STACKARRAY(UA_String, dsWriterNames, writerGroup->writersCount);
+    UA_STACKARRAY(UA_DataSetFieldContentMask, dsWriterFieldMasks, writerGroup->writersCount);
     UA_DataSetWriter *dsw;
     LIST_FOREACH(dsw, &writerGroup->writers, listEntry) {
         if(dsw->state != UA_PUBSUBSTATE_OPERATIONAL)
@@ -1050,8 +1108,11 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
         }
 
         /* There is no promoted field and we can batch dsm. So do the batching. */
-        if(pds->promotedFieldsCount == 0 && maxDSM > 1) {
-            dsWriterIds[dsmCount] = dsw->config.dataSetWriterId;
+        if(((pds->promotedFieldsCount == 0 && pds->config.sendViaWriterGroupTopic) &&
+             maxDSM > 1)) {
+            dsWriterIds[dsmCount] = dsw->config.dataSetWriterId; 
+            dsWriterNames[dsmCount] = dsw->config.name;
+            dsWriterFieldMasks[dsmCount] = dsw->config.dataSetFieldContentMask;
             dsmCount++;
             continue;
         }
@@ -1065,8 +1126,9 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
         } else { /* if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_JSON) */
 #ifdef UA_ENABLE_JSON_ENCODING
             res = sendNetworkMessageJson(connection, &dsmStore[dsmCount],
-                                         &dsw->config.dataSetWriterId, 1,
-                                         &writerGroup->config.transportSettings);
+                                         &dsw->config.dataSetWriterId, &dsw->config.name, 1,
+                                         &dsw->config.transportSettings, 
+                                         &dsw->config.dataSetFieldContentMask);
 #else
             res = UA_STATUSCODE_BADNOTSUPPORTED;
 #endif
@@ -1104,8 +1166,9 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
         } else { /* if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_JSON) */
 #ifdef UA_ENABLE_JSON_ENCODING
             res = sendNetworkMessageJson(connection, &dsmStore[i],
-                                         &dsWriterIds[i], nmDsmCount,
-                                         &writerGroup->config.transportSettings);
+                                         &dsWriterIds[i], &dsWriterNames[i], nmDsmCount,
+                                         &writerGroup->config.transportSettings,
+                                         &dsWriterFieldMasks[i]);
 #else
             res = UA_STATUSCODE_BADNOTSUPPORTED;
 #endif

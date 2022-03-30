@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
  * Copyright (c) 2019 Fraunhofer IOSB (Author: Lukas Meling)
+ * Copyright (c) 2022 ISW (for umati and VDW e.V.) (Author: Moritz Walker)
  */
 
 #include <open62541/types.h>
@@ -11,7 +12,7 @@
 #include "ua_pubsub_networkmessage.h"
 #include "ua_types_encoding_json.h"
 
-/* Json keys for dsm */
+/* Json keys for networkmessage */
 const char * UA_DECODEKEY_MESSAGES = "Messages";
 const char * UA_DECODEKEY_MESSAGETYPE = "MessageType";
 const char * UA_DECODEKEY_MESSAGEID = "MessageId";
@@ -20,6 +21,7 @@ const char * UA_DECODEKEY_DATASETCLASSID = "DataSetClassId";
 
 /* Json keys for dsm */
 const char * UA_DECODEKEY_DATASETWRITERID = "DataSetWriterId";
+const char * UA_DECODEKEY_DATASETWRITERNAME = "DataSetWriterName";
 const char * UA_DECODEKEY_SEQUENCENUMBER = "SequenceNumber";
 const char * UA_DECODEKEY_METADATAVERSION = "MetaDataVersion";
 const char * UA_DECODEKEY_TIMESTAMP = "Timestamp";
@@ -38,6 +40,7 @@ static UA_StatusCode writeJsonKey_UA_String(CtxJson *ctx, UA_String *in) {
 static UA_StatusCode
 UA_DataSetMessage_encodeJson_internal(const UA_DataSetMessage* src,
                                       UA_UInt16 dataSetWriterId,
+                                      UA_String dataSetWriterName,
                                       CtxJson *ctx) {
     status rv = writeJsonObjStart(ctx);
 
@@ -46,6 +49,13 @@ UA_DataSetMessage_encodeJson_internal(const UA_DataSetMessage* src,
                           &dataSetWriterId, &UA_TYPES[UA_TYPES_UINT16]);
     if(rv != UA_STATUSCODE_GOOD)
         return rv;
+    
+    /* DataSetWriterName */
+    rv |= writeJsonObjElm(ctx, UA_DECODEKEY_DATASETWRITERNAME,
+                          &dataSetWriterName, &UA_TYPES[UA_TYPES_STRING]);
+    if(rv != UA_STATUSCODE_GOOD)
+        return rv;
+
 
     /* DataSetMessageSequenceNr */
     if(src->header.dataSetMessageSequenceNrEnabled) {
@@ -119,7 +129,16 @@ UA_DataSetMessage_encodeJson_internal(const UA_DataSetMessage* src,
         }
     } else {
         /* RawData */
-        return UA_STATUSCODE_BADNOTIMPLEMENTED;
+        for (UA_UInt16 i = 0; i < src->data.keyFrameData.fieldCount; i++) {
+            if(src->data.keyFrameData.fieldNames)
+                rv |= writeJsonKey_UA_String(ctx, &src->data.keyFrameData.fieldNames[i]);
+            else
+                rv |= writeJsonKey(ctx, "");
+            rv |= encodeJsonInternal(&src->data.keyFrameData.dataSetFields[i],
+                                    &UA_TYPES[UA_TYPES_VARIANT], ctx);
+            if(rv != UA_STATUSCODE_GOOD)
+                return rv;
+        }
     }
     rv |= writeJsonObjEnd(ctx); /* Payload */
     rv |= writeJsonObjEnd(ctx); /* DataSetMessage */
@@ -130,90 +149,101 @@ static UA_StatusCode
 UA_NetworkMessage_encodeJson_internal(const UA_NetworkMessage* src, CtxJson *ctx) {
     status rv = UA_STATUSCODE_GOOD;
     /* currently only ua-data is supported, no discovery message implemented */
-    if(src->networkMessageType != UA_NETWORKMESSAGE_DATASET)
-        return UA_STATUSCODE_BADNOTIMPLEMENTED;
-
-    writeJsonObjStart(ctx);
-
-    /* Table 91 – JSON NetworkMessage Definition
-     * MessageId | String | A globally unique identifier for the message.
-     * This value is mandatory. But we don't check uniqueness in the
-     * encoding layer. */
-    rv |= writeJsonObjElm(ctx, UA_DECODEKEY_MESSAGEID,
-                          &src->messageId, &UA_TYPES[UA_TYPES_STRING]);
-
-    /* MessageType */
-    UA_String s = UA_STRING("ua-data");
-    rv |= writeJsonObjElm(ctx, UA_DECODEKEY_MESSAGETYPE,
-                          &s, &UA_TYPES[UA_TYPES_STRING]);
-
-    /* PublisherId */
-    if(src->publisherIdEnabled) {
-        rv = writeJsonKey(ctx, UA_DECODEKEY_PUBLISHERID);
-        switch (src->publisherIdType) {
-        case UA_PUBLISHERDATATYPE_BYTE:
-            rv |= encodeJsonInternal(&src->publisherId.publisherIdByte,
-                                     &UA_TYPES[UA_TYPES_BYTE], ctx);
+    switch (src->networkMessageType) {
+        case UA_NETWORKMESSAGE_DATASETMETADATA:
+            rv |= UA_DataSetMetaData_encodeJson_internal(
+                src->payload.metaDataPayload.dataSetMetaData, (void*) ctx);
             break;
+        
+        case UA_NETWORKMESSAGE_DATASET:
+            writeJsonObjStart(ctx);
 
-        case UA_PUBLISHERDATATYPE_UINT16:
-            rv |= encodeJsonInternal(&src->publisherId.publisherIdUInt16,
-                                     &UA_TYPES[UA_TYPES_UINT16], ctx);
-            break;
+            /* Table 91 – JSON NetworkMessage Definition
+            * MessageId | String | A globally unique identifier for the message.
+            * This value is mandatory. But we don't check uniqueness in the
+            * encoding layer. */
+            rv |= writeJsonObjElm(ctx, UA_DECODEKEY_MESSAGEID,
+                                &src->messageId, &UA_TYPES[UA_TYPES_STRING]);
 
-        case UA_PUBLISHERDATATYPE_UINT32:
-            rv |= encodeJsonInternal(&src->publisherId.publisherIdUInt32,
-                                     &UA_TYPES[UA_TYPES_UINT32], ctx);
-            break;
+            /* MessageType */
+            UA_String s = UA_STRING("ua-data");
+            rv |= writeJsonObjElm(ctx, UA_DECODEKEY_MESSAGETYPE,
+                                &s, &UA_TYPES[UA_TYPES_STRING]);
 
-        case UA_PUBLISHERDATATYPE_UINT64:
-            rv |= encodeJsonInternal(&src->publisherId.publisherIdUInt64,
-                                     &UA_TYPES[UA_TYPES_UINT64], ctx);
-            break;
+            /* PublisherId */
+            if(src->publisherIdEnabled) {
+                rv = writeJsonKey(ctx, UA_DECODEKEY_PUBLISHERID);
+                switch (src->publisherIdType) {
+                case UA_PUBLISHERDATATYPE_BYTE:
+                    rv |= encodeJsonInternal(&src->publisherId.publisherIdByte,
+                                            &UA_TYPES[UA_TYPES_BYTE], ctx);
+                    break;
 
-        case UA_PUBLISHERDATATYPE_STRING:
-            rv |= encodeJsonInternal(&src->publisherId.publisherIdString,
-                                     &UA_TYPES[UA_TYPES_STRING], ctx);
-            break;
-        }
-    }
-    if(rv != UA_STATUSCODE_GOOD)
-        return rv;
+                case UA_PUBLISHERDATATYPE_UINT16:
+                    rv |= encodeJsonInternal(&src->publisherId.publisherIdUInt16,
+                                            &UA_TYPES[UA_TYPES_UINT16], ctx);
+                    break;
 
-    /* DataSetClassId */
-    if(src->dataSetClassIdEnabled) {
-        rv |= writeJsonObjElm(ctx, UA_DECODEKEY_DATASETCLASSID,
-                              &src->dataSetClassId, &UA_TYPES[UA_TYPES_GUID]);
-        if(rv != UA_STATUSCODE_GOOD)
-            return rv;
-    }
+                case UA_PUBLISHERDATATYPE_UINT32:
+                    rv |= encodeJsonInternal(&src->publisherId.publisherIdUInt32,
+                                            &UA_TYPES[UA_TYPES_UINT32], ctx);
+                    break;
 
-    /* Payload: DataSetMessages */
-    UA_Byte count = src->payloadHeader.dataSetPayloadHeader.count;
-    if(count > 0) {
-        UA_UInt16 *dataSetWriterIds =
-            src->payloadHeader.dataSetPayloadHeader.dataSetWriterIds;
-        if(!dataSetWriterIds)
-            return UA_STATUSCODE_BADENCODINGERROR;
+                case UA_PUBLISHERDATATYPE_UINT64:
+                    rv |= encodeJsonInternal(&src->publisherId.publisherIdUInt64,
+                                            &UA_TYPES[UA_TYPES_UINT64], ctx);
+                    break;
 
-        rv |= writeJsonKey(ctx, UA_DECODEKEY_MESSAGES);
-        rv |= writeJsonArrStart(ctx); /* start array */
-
-        const UA_DataSetMessage *dataSetMessages =
-            src->payload.dataSetPayload.dataSetMessages;
-        for(UA_UInt16 i = 0; i < count; i++) {
-            writeJsonCommaIfNeeded(ctx);
-            rv |= UA_DataSetMessage_encodeJson_internal(&dataSetMessages[i],
-                                                        dataSetWriterIds[i], ctx);
+                case UA_PUBLISHERDATATYPE_STRING:
+                    rv |= encodeJsonInternal(&src->publisherId.publisherIdString,
+                                            &UA_TYPES[UA_TYPES_STRING], ctx);
+                    break;
+                }
+            }
             if(rv != UA_STATUSCODE_GOOD)
                 return rv;
-            /* comma is needed if more dsm are present */
-            ctx->commaNeeded[ctx->depth] = true;
-        }
-        rv |= writeJsonArrEnd(ctx); /* end array */
-    }
 
-    rv |= writeJsonObjEnd(ctx);
+            /* DataSetClassId */
+            if(src->dataSetClassIdEnabled) {
+                rv |= writeJsonObjElm(ctx, UA_DECODEKEY_DATASETCLASSID,
+                                    &src->dataSetClassId, &UA_TYPES[UA_TYPES_GUID]);
+                if(rv != UA_STATUSCODE_GOOD)
+                    return rv;
+            }
+
+            /* Payload: DataSetMessages */
+            UA_Byte count = src->payloadHeader.dataSetPayloadHeader.count;
+            if(count > 0){
+                UA_UInt16 *dataSetWriterIds = 
+                    src->payloadHeader.dataSetPayloadHeader.dataSetWriterIds;
+                UA_String *dataSetWriterNames = 
+                    src->payloadHeader.dataSetPayloadHeader.dataSetWriterNames;
+
+                if(!dataSetWriterIds){
+                    return UA_STATUSCODE_BADENCODINGERROR;
+                }
+
+                rv |= writeJsonKey(ctx, UA_DECODEKEY_MESSAGES);
+                rv |= writeJsonArrStart(ctx); /* start array */
+
+                for (UA_UInt16 i = 0; i < count; i++) {
+                    writeJsonCommaIfNeeded(ctx);
+                    rv |= UA_DataSetMessage_encodeJson_internal(
+                        &src->payload.dataSetPayload.dataSetMessages[i],
+                        dataSetWriterIds[i], dataSetWriterNames[i], ctx);
+                    if(rv != UA_STATUSCODE_GOOD)
+                        return rv;
+                    /* comma is needed if more dsm are present */
+                    ctx->commaNeeded[ctx->depth] = true;
+                }
+                rv |= writeJsonArrEnd(ctx); /* end array */
+            }
+
+            rv |= writeJsonObjEnd(ctx);
+            break;
+        default:
+            return UA_STATUSCODE_BADNOTIMPLEMENTED;
+    }
     return rv;
 }
 
