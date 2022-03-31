@@ -406,6 +406,11 @@ UA_Server_addDataSetField(UA_Server *server, const UA_NodeId publishedDataSet,
         return result;
     }
 
+    /* Copy the identifier from the metadata. Cannot fail with a guid NodeId. */
+    newField->identifier = UA_NODEID_GUID(1, fmd.dataSetFieldId);
+    if(fieldIdentifier)
+        UA_NodeId_copy(&newField->identifier, fieldIdentifier);
+
     /* Append to the metadata fields array. Point of last return. */
     result.result = UA_Array_append((void**)&currDS->dataSetMetaData.fields,
                                     &currDS->dataSetMetaData.fieldsSize,
@@ -416,11 +421,6 @@ UA_Server_addDataSetField(UA_Server *server, const UA_NodeId publishedDataSet,
         UA_free(newField);
         return result;
     }
-
-    /* Copy the identifier from the metadata. Cannot fail with a guid NodeId. */
-    newField->identifier = UA_NODEID_GUID(1, fmd.dataSetFieldId);
-    if(fieldIdentifier)
-        UA_NodeId_copy(&newField->identifier, fieldIdentifier);
 
     /* Register the field. The order of DataSetFields should be the same in both
      * creating and publishing. So adding DataSetFields at the the end of the
@@ -448,6 +448,36 @@ UA_Server_addDataSetField(UA_Server *server, const UA_NodeId publishedDataSet,
     result.configurationVersion.minorVersion =
         currDS->dataSetMetaData.configurationVersion.minorVersion;
     return result;
+}
+
+void
+UA_Server_updateDataSetField(UA_Server *server, const UA_NodeId dsf) {
+    UA_DataSetField *currentField = UA_DataSetField_findDSFbyId(server, dsf);
+    if(!currentField) {
+        return;
+    }
+
+    if(currentField->configurationFrozen) {
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "Remove DataSetField failed. DataSetField is frozen.");
+        return;
+    }
+
+    UA_PublishedDataSet *pds =
+        UA_PublishedDataSet_findPDSbyId(server, currentField->publishedDataSet);
+    if(!pds) {
+        return;
+    }
+
+    if(pds->configurationFrozen) {
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                       "Remove DataSetField failed. PublishedDataSet is frozen.");
+        return;
+    }
+
+    /* Update minor version of PublishedDataSet */
+    pds->dataSetMetaData.configurationVersion.minorVersion =
+        UA_PubSubConfigurationVersionTimeDifference();
 }
 
 UA_DataSetFieldResult
@@ -826,7 +856,7 @@ UA_Server_addDataSetWriter(UA_Server *server,
             /* Generate the DSMD */
             UA_DataSetMetaData dataSetMetaData;
             UA_DataSetMetaDataType *dsmdt = &pds->dataSetMetaData;
-            res |= UA_DataSetWriter_generateDataSetMetaData(server, &dataSetMetaData, dsmdt, newDataSetWriter);
+            res |= UA_DataSetWriter_generateDataSetMetaData(server, &dataSetMetaData, dsmdt, newDataSetWriter, UA_TRUE);
             if(res != UA_STATUSCODE_GOOD) {
                 UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
                             "PubSub: DataSetMessageMetaData generation failed");
@@ -1429,10 +1459,18 @@ UA_StatusCode
 UA_DataSetWriter_generateDataSetMetaData(UA_Server *server,
                                         UA_DataSetMetaData *dataSetMetaData,
                                         UA_DataSetMetaDataType *dataSetMetaDataType,
-                                        UA_DataSetWriter *dataSetWriter) {
+                                        UA_DataSetWriter *dataSetWriter,
+                                        UA_Boolean ignoreVersion) {
     UA_PublishedDataSet *currentDataSet =
         UA_PublishedDataSet_findPDSbyId(server, dataSetWriter->connectedDataSet);
     if(!currentDataSet)
+        return UA_STATUSCODE_BADNOTFOUND;
+
+    if (dataSetWriter->connectedDataSetVersion.majorVersion == 
+        currentDataSet->dataSetMetaData.configurationVersion.majorVersion &&
+        dataSetWriter->connectedDataSetVersion.minorVersion ==
+        currentDataSet->dataSetMetaData.configurationVersion.minorVersion &&
+        !ignoreVersion)
         return UA_STATUSCODE_BADNOTFOUND;
 
     /* Reset the message */

@@ -1106,7 +1106,38 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
             UA_DataSetWriter_setPubSubState(server, UA_PUBSUBSTATE_ERROR, dsw);
             continue;
         }
+#ifdef UA_ENABLE_JSON_ENCODING
+        /* Generate the DSMD */
+        UA_DataSetMetaData dataSetMetaData;
+        UA_DataSetMetaDataType *dsmdt = &pds->dataSetMetaData;
+        
+        res |= UA_DataSetWriter_generateDataSetMetaData(server, &dataSetMetaData, dsmdt, dsw, UA_FALSE);
+        if(res != UA_STATUSCODE_GOOD) {
 
+        } else {      
+            UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                "PubSub: DataSetMessageMetaData configuration changed.");  
+            switch(connection->config->publisherIdType) {
+                case UA_PUBSUB_PUBLISHERID_NUMERIC:
+                    dataSetMetaData.publisherIdType = UA_PUBLISHERDATATYPE_UINT32;
+                    dataSetMetaData.publisherId.publisherIdUInt32 = connection->config->publisherId.numeric;
+                    break;
+                case UA_PUBSUB_PUBLISHERID_STRING:
+                    dataSetMetaData.publisherIdType = UA_PUBLISHERDATATYPE_STRING;
+                    dataSetMetaData.publisherId.publisherIdString = connection->config->publisherId.string;
+                    break;
+                default:
+                    break;
+            }
+
+            res = sendNetworkMessageMetadataJson(connection, &dataSetMetaData, &dsw->config.dataSetWriterId, 1, &dsw->config.transportSettings);
+            if(res != UA_STATUSCODE_GOOD) {
+                UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                            "PubSub: DataSetMessageMetaData sending failed");
+            }
+            UA_DataSetMetaData_clear(&dataSetMetaData);         
+        }
+#endif
         /* There is no promoted field and we can batch dsm. So do the batching. */
         if(((pds->promotedFieldsCount == 0 && pds->config.sendViaWriterGroupTopic) &&
              maxDSM > 1)) {

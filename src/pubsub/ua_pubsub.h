@@ -152,7 +152,8 @@ UA_StatusCode
 UA_DataSetWriter_generateDataSetMetaData(UA_Server *server,
                                         UA_DataSetMetaData *dataSetMetaData,
                                         UA_DataSetMetaDataType *dataSetMetaDataType, 
-                                        UA_DataSetWriter *dataSetWriter);
+                                        UA_DataSetWriter *dataSetWriter,
+                                        UA_Boolean ignoreVersion);
 
 UA_StatusCode
 UA_DataSetWriter_remove(UA_Server *server, UA_WriterGroup *linkedWriterGroup,
