@@ -680,15 +680,60 @@ setPublishedDataSetType(const UA_PublishedDataSetDataType *pdsParams,
         config->publishedDataSetType = UA_PUBSUB_DATASET_PUBLISHEDITEMS;
         return UA_STATUSCODE_GOOD;
     } else if(sourceType == &UA_TYPES[UA_TYPES_PUBLISHEDEVENTSDATATYPE]) {
-        /* config.publishedDataSetType = UA_PUBSUB_DATASET_PUBLISHEDEVENTS; */
-        UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
-                     "[UA_PubSubManager_setPublishedDataSetType] Published events not supported.");
-        return UA_STATUSCODE_BADNOTIMPLEMENTED;
+        config->publishedDataSetType = UA_PUBSUB_DATASET_PUBLISHEDEVENTS;
+        return UA_STATUSCODE_GOOD;
     }
 
     UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
                  "[UA_PubSubManager_setPublishedDataSetType] Invalid DataSetSourceDataType.");
     return UA_STATUSCODE_BADINTERNALERROR;
+}
+
+/* UA_PubSubManager_setPublishedDataSetConfig() */
+/**
+ * @brief   Sets the PublishedDataSet config of type PublishedItems or PublishedEvents.
+ *
+ *
+ * @param   publishedDataSetParameters  [in]    PublishedDataSet parameters
+ * @param   config                      [bi]    PublishedDataSet configuration object
+ *
+ * @return  UA_STATUSCODE_GOOD on success
+ */
+static UA_StatusCode
+setPublishedDataSetConfig(const UA_PublishedDataSetDataType *const publishedDataSetParameters,
+                                         UA_PublishedDataSetConfig *config) {
+    if(publishedDataSetParameters->dataSetSource.encoding != UA_EXTENSIONOBJECT_DECODED) {
+        return UA_STATUSCODE_BADINTERNALERROR;
+    }
+
+    UA_StatusCode statusCode = UA_STATUSCODE_GOOD;
+
+    if(UA_NodeId_equal(&publishedDataSetParameters->dataSetSource.content.decoded.type->typeId,
+                       &UA_TYPES[UA_TYPES_PUBLISHEDDATAITEMSDATATYPE].typeId)) {
+        /* The UA_PUBSUB_DATASET_PUBLISHEDITEMS has currently no additional members
+         * and thus no dedicated config structure.*/
+    }
+    else if(UA_NodeId_equal(&publishedDataSetParameters->dataSetSource.content.decoded.type->typeId,
+                              &UA_TYPES[UA_TYPES_PUBLISHEDEVENTSDATATYPE].typeId)) {
+        UA_PublishedEventsDataType *publishedEvents =
+            (UA_PublishedEventsDataType *)publishedDataSetParameters->dataSetSource.content.decoded.data;
+
+        if(publishedEvents->selectedFieldsSize != publishedDataSetParameters->dataSetMetaData.fieldsSize){
+            return UA_STATUSCODE_BADINTERNALERROR;
+        }
+
+        config->config.event.eventNotifier = publishedEvents->eventNotifier;
+        config->config.event.selectedFieldsSize = publishedEvents->selectedFieldsSize;
+        config->config.event.selectedFields = publishedEvents->selectedFields;
+        config->config.event.filter = publishedEvents->filter;
+    }
+    else{
+        UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
+                     "[UA_PubSubManager_setPublishedDataSetConfig] Invalid DataSetSourceDataType.");
+        statusCode = UA_STATUSCODE_BADINTERNALERROR;
+    }
+
+    return statusCode;
 }
 
 /* Creates PublishedDataSetConfig object from PublishedDataSet object
@@ -708,6 +753,11 @@ createPublishedDataSet(UA_Server *server,
     if(res != UA_STATUSCODE_GOOD)
         return res;
 
+    res = setPublishedDataSetConfig(pdsParams, &config);
+    if(statusCode != UA_STATUSCODE_GOOD) {
+        return statusCode;
+    }
+
     res = UA_Server_addPublishedDataSet(server, &config, pdsIdent).addResult;
     if(res != UA_STATUSCODE_GOOD) {
         UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
@@ -725,6 +775,52 @@ createPublishedDataSet(UA_Server *server,
     }
 
     return res;
+}
+
+/* UA_PubSubManager_addDataSetFieldEvents*/
+/**
+ * @brief   Adds DataSetField Events bound to a certain PublishedDataSet.
+ *          This method does NOT check, whether the PublishedDataSet actually contains Events instead of Variables!
+ *
+ * @param   server                      [bi]    UA_Server object that shall be configured
+ * @param   publishedDataSetIdent       [in]    NodeId of the publishedDataSet, the DataSetField belongs to
+ * @param   publishedDataSetParameters  [in]    publishedDataSet configuration
+ *
+ * @return  UA_STATUSCODE_GOOD on success
+ */
+static UA_StatusCode
+addDataSetFieldEvents(UA_Server *server, const UA_NodeId *publishedDataSetIdent,
+                                          const UA_PublishedDataSetDataType *const publishedDataSetParameters) {
+
+    UA_PublishedEventsDataType *publishedEvents =
+        (UA_PublishedEventsDataType *)publishedDataSetParameters->dataSetSource.content.decoded.data;
+    if(publishedEvents->selectedFieldsSize != publishedDataSetParameters->dataSetMetaData.fieldsSize){
+        return UA_STATUSCODE_BADINTERNALERROR;
+    }
+
+    UA_StatusCode statusCode = UA_STATUSCODE_GOOD;
+    for(UA_Int32 dsFieldIndex = 0;
+        dsFieldIndex < (UA_Int32)publishedEvents->selectedFieldsSize && statusCode == UA_STATUSCODE_GOOD;
+        dsFieldIndex++)
+    {
+        UA_DataSetFieldConfig fieldConfig;
+        memset(&fieldConfig, 0, sizeof(UA_DataSetFieldConfig));
+
+        fieldConfig.dataSetFieldType = UA_PUBSUB_DATASETFIELD_EVENT;
+        fieldConfig.field.events.promotedField =
+            publishedDataSetParameters->dataSetMetaData.fields[dsFieldIndex].fieldFlags & 0x0001;
+        fieldConfig.field.events.fieldNameAlias =
+            publishedDataSetParameters->dataSetMetaData.fields[dsFieldIndex].name;
+
+        UA_NodeId fieldIdent;
+        statusCode = UA_Server_addDataSetField(server, *publishedDataSetIdent, &fieldConfig, &fieldIdent).result;
+        if(statusCode != UA_STATUSCODE_GOOD) {
+            UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
+                         "[UA_PubSubManager_addDataSetFieldEvents] Adding DataSetField Event failed.");
+        }
+    }
+
+    return UA_STATUSCODE_GOOD;
 }
 
 /* Adds DataSetField Variables bound to a certain PublishedDataSet. This method does NOT
@@ -783,10 +879,7 @@ createDataSetFields(UA_Server *server, const UA_NodeId *pdsIdent,
     /* TODO: Implement Routine for adding Event DataSetFields */
     if(pdsParams->dataSetSource.content.decoded.type ==
        &UA_TYPES[UA_TYPES_PUBLISHEDEVENTSDATATYPE]) {
-        UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
-                     "[UA_PubSubManager_createDataSetFields] "
-                     "Published events not supported.");
-        return UA_STATUSCODE_BADNOTIMPLEMENTED;
+        return addDataSetFieldEvents(server, pdsIdent, pdsParams);
     }
 
     UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER,
@@ -870,46 +963,78 @@ encodePubSubConfiguration(UA_PubSubConfigurationDataType *configurationParameter
 static UA_StatusCode
 generatePublishedDataSetDataType(const UA_PublishedDataSet *src,
                                  UA_PublishedDataSetDataType *dst) {
-    if(src->config.publishedDataSetType != UA_PUBSUB_DATASET_PUBLISHEDITEMS)
-        return UA_STATUSCODE_BADNOTIMPLEMENTED;
+   memset(dst, 0, sizeof(UA_PublishedDataSetDataType));
 
-    memset(dst, 0, sizeof(UA_PublishedDataSetDataType));
+    if(src->config.publishedDataSetType == UA_PUBSUB_DATASET_PUBLISHEDITEMS) {
+        UA_PublishedDataItemsDataType *tmp = UA_PublishedDataItemsDataType_new();
+        UA_String_copy(&src->config.name, &dst->name);
+        dst->dataSetMetaData.fieldsSize = src->fieldSize;
 
-    UA_PublishedDataItemsDataType *tmp = UA_PublishedDataItemsDataType_new();
-    UA_String_copy(&src->config.name, &dst->name);
-    dst->dataSetMetaData.fieldsSize = src->fieldSize;
+        size_t index = 0;
+        tmp->publishedDataSize = src->fieldSize;
+        tmp->publishedData = (UA_PublishedVariableDataType*)UA_Array_new(tmp->publishedDataSize, &UA_TYPES[UA_TYPES_PUBLISHEDVARIABLEDATATYPE]);
+        if(tmp->publishedData == NULL) {
+            UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Allocation memory failed");
+            return UA_STATUSCODE_BADOUTOFMEMORY;
+        }
 
-    size_t index = 0;
-    tmp->publishedDataSize = src->fieldSize;
-    tmp->publishedData = (UA_PublishedVariableDataType*)
-        UA_Array_new(tmp->publishedDataSize, &UA_TYPES[UA_TYPES_PUBLISHEDVARIABLEDATATYPE]);
-    if(tmp->publishedData == NULL) {
-        UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Allocation memory failed");
-        return UA_STATUSCODE_BADOUTOFMEMORY;
+        dst->dataSetMetaData.fields = (UA_FieldMetaData*)UA_Array_new(dst->dataSetMetaData.fieldsSize, &UA_TYPES[UA_TYPES_FIELDMETADATA]);
+        if(dst->dataSetMetaData.fields == NULL) {
+            UA_free(tmp->publishedData);
+            UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Allocation memory failed");
+            return UA_STATUSCODE_BADOUTOFMEMORY;
+        }
+
+        UA_DataSetField *dsf, *dsf_tmp = NULL;
+        TAILQ_FOREACH_SAFE(dsf ,&src->fields, listEntry, dsf_tmp) {
+            UA_String_copy(&dsf->config.field.variable.fieldNameAlias, &dst->dataSetMetaData.fields[index].name);
+            UA_PublishedVariableDataType_copy(&dsf->config.field.variable.publishParameters, &tmp->publishedData[index]);
+            UA_ConfigurationVersionDataType_copy(&dsf->config.field.variable.configurationVersion, &dst->dataSetMetaData.configurationVersion);
+            dst->dataSetMetaData.fields[index].fieldFlags = dsf->config.field.variable.promotedField;
+            index++;
+        }
+
+        dst->dataSetSource.encoding = UA_EXTENSIONOBJECT_DECODED;
+        dst->dataSetSource.content.decoded.data = tmp;
+        dst->dataSetSource.content.decoded.type = &UA_TYPES[UA_TYPES_PUBLISHEDDATAITEMSDATATYPE];
     }
+    else if(src->config.publishedDataSetType == UA_PUBSUB_DATASET_PUBLISHEDEVENTS) {
+        UA_PublishedEventsDataType *tmp = UA_PublishedEventsDataType_new();
+        UA_String_copy(&src->config.name, &dst->name);
+        dst->dataSetMetaData.fieldsSize = src->fieldSize;
 
-    dst->dataSetMetaData.fields = (UA_FieldMetaData*)
-        UA_Array_new(dst->dataSetMetaData.fieldsSize, &UA_TYPES[UA_TYPES_FIELDMETADATA]);
-    if(dst->dataSetMetaData.fields == NULL) {
-        UA_free(tmp->publishedData);
-        UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Allocation memory failed");
-        return UA_STATUSCODE_BADOUTOFMEMORY;
-    }
+        UA_NodeId_copy(&src->config.config.event.eventNotifier, &tmp->eventNotifier);
+        UA_ContentFilter_copy(&src->config.config.event.filter, &tmp->filter);
+        tmp->selectedFieldsSize = src->config.config.event.selectedFieldsSize;
+        tmp->selectedFields = (UA_SimpleAttributeOperand*)UA_Array_new(tmp->selectedFieldsSize, &UA_TYPES[UA_TYPES_SIMPLEATTRIBUTEOPERAND]);
+        if(tmp->selectedFields == NULL) {
+            UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Allocation memory failed");
+            return UA_STATUSCODE_BADOUTOFMEMORY;
+        }
+        for(size_t i = 0; i < src->config.config.event.selectedFieldsSize; i++){
+            UA_SimpleAttributeOperand_copy(&src->config.config.event.selectedFields[i],
+                                                  &tmp->selectedFields[i]);
+        }
 
-    UA_DataSetField *dsf, *dsf_tmp = NULL;
-    TAILQ_FOREACH_SAFE(dsf ,&src->fields, listEntry, dsf_tmp) {
-        UA_String_copy(&dsf->config.field.variable.fieldNameAlias,
-                       &dst->dataSetMetaData.fields[index].name);
-        UA_PublishedVariableDataType_copy(&dsf->config.field.variable.publishParameters,
-                                          &tmp->publishedData[index]);
-        UA_ConfigurationVersionDataType_copy(&dsf->config.field.variable.configurationVersion,
-                                             &dst->dataSetMetaData.configurationVersion);
-        dst->dataSetMetaData.fields[index].fieldFlags =
-            dsf->config.field.variable.promotedField;
-        index++;
+        dst->dataSetMetaData.fields = (UA_FieldMetaData*)UA_Array_new(dst->dataSetMetaData.fieldsSize, &UA_TYPES[UA_TYPES_FIELDMETADATA]);
+        if(dst->dataSetMetaData.fields == NULL) {
+            UA_free(tmp->selectedFields);
+            UA_LOG_ERROR(UA_Log_Stdout, UA_LOGCATEGORY_SERVER, "Allocation memory failed");
+            return UA_STATUSCODE_BADOUTOFMEMORY;
+        }
+
+        size_t index = 0;
+        UA_DataSetField *dsf, *dsf_tmp = NULL;
+        TAILQ_FOREACH_SAFE(dsf ,&src->fields, listEntry, dsf_tmp) {
+            UA_String_copy(&dsf->config.field.events.fieldNameAlias, &dst->dataSetMetaData.fields[index].name);
+            dst->dataSetMetaData.fields[index].fieldFlags = dsf->config.field.events.promotedField;
+            index++;
+        }
+
+        dst->dataSetSource.encoding = UA_EXTENSIONOBJECT_DECODED;
+        dst->dataSetSource.content.decoded.data = tmp;
+        dst->dataSetSource.content.decoded.type = &UA_TYPES[UA_TYPES_PUBLISHEDEVENTSDATATYPE];
     }
-    UA_ExtensionObject_setValue(&dst->dataSetSource, tmp,
-                                &UA_TYPES[UA_TYPES_PUBLISHEDDATAITEMSDATATYPE]);
 
     return UA_STATUSCODE_GOOD;
 }

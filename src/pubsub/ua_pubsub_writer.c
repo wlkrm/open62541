@@ -134,6 +134,14 @@ UA_PublishedDataSetConfig_copy(const UA_PublishedDataSetConfig *src,
             //no additional items
             break;
 
+        case UA_PUBSUB_DATASET_PUBLISHEDEVENTS:
+            UA_NodeId_copy(&src->config.event.eventNotfier, &dst->config.event.eventNotfier);
+            UA_ContentFilter_copy(&src->config.event.filter, &dst->config.event.filter);
+            res = UA_Array_copy(src->config.event.selectedFields, src->config.event.selectedFieldsSize, 
+                (void**) &dst->config.event.selectedFields, &UA_TYPES[UA_TYPES_SIMPLEATTRIBUTEOPERAND]);
+            dst->config.event.selectedFieldsSize = src->config.event.selectedFieldsSize;
+            break;
+
         case UA_PUBSUB_DATASET_PUBLISHEDITEMS_TEMPLATE:
             if(src->config.itemsTemplate.variablesToAddSize > 0) {
                 dst->config.itemsTemplate.variablesToAdd = (UA_PublishedVariableDataType *)
@@ -843,6 +851,25 @@ UA_Server_addDataSetWriter(UA_Server *server,
 #endif
     if(writerIdentifier)
         UA_NodeId_copy(&newDataSetWriter->identifier, writerIdentifier);
+
+    if (currentDataSetContext->config.publishedDataSetType == UA_PUBSUB_DATASET_PUBLISHEDEVENTS) {
+        PublishedDataSetEventEntry *pdse = (PublishedDataSetEventEntry*) 
+            UA_calloc(1, sizeof(PublishedDataSetEventEntry)); 
+        
+        pdse->pds = currentDataSetContext;
+        pdse->dsw = newDataSetWriter;
+
+        /* Insert into the queue of the manager */
+        if(server->pubSubManager.publishedDataSetsSize != 0) {
+            LIST_INSERT_HEAD(&server->pubSubManager.publishedDataSetEvents,
+                            pdse, listEntry);
+        } else {
+            LIST_INIT(&server->pubSubManager.publishedDataSetEvents);
+            LIST_INSERT_HEAD(&server->pubSubManager.publishedDataSetEvents,
+                            pdse, listEntry);
+        }
+        server->pubSubManager.publishedDataSetsSize++;
+    }
     
 #ifdef UA_ENABLE_JSON_ENCODING
     if(wg->config.encodingMimeType == UA_PUBSUB_ENCODING_JSON) {
@@ -1117,15 +1144,17 @@ UA_PubSubDataSetWriter_generateKeyFrameMessage(UA_Server *server,
     /* Prepare DataSetMessageContent */
     dataSetMessage->header.dataSetMessageValid = true;
     dataSetMessage->header.dataSetMessageType = UA_DATASETMESSAGE_DATAKEYFRAME;
-    dataSetMessage->data.keyFrameData.fieldCount = currentDataSet->fieldSize;
+    UA_UInt16 fieldNo = (UA_UInt16)(currentDataSet->fieldSize + 
+        currentDataSet->config.config.event.selectedFieldsSize);
+    dataSetMessage->data.keyFrameData.fieldCount = fieldNo;
     dataSetMessage->data.keyFrameData.dataSetFields = (UA_DataValue *)
-            UA_Array_new(currentDataSet->fieldSize, &UA_TYPES[UA_TYPES_DATAVALUE]);
+        UA_Array_new(fieldNo, &UA_TYPES[UA_TYPES_DATAVALUE]);
     if(!dataSetMessage->data.keyFrameData.dataSetFields)
         return UA_STATUSCODE_BADOUTOFMEMORY;
 
 #ifdef UA_ENABLE_JSON_ENCODING
     dataSetMessage->data.keyFrameData.fieldNames = (UA_String *)
-        UA_Array_new(currentDataSet->fieldSize, &UA_TYPES[UA_TYPES_STRING]);
+        UA_Array_new(fieldNo, &UA_TYPES[UA_TYPES_STRING]);
     if(!dataSetMessage->data.keyFrameData.fieldNames) {
         UA_DataSetMessage_clear(dataSetMessage);
         return UA_STATUSCODE_BADOUTOFMEMORY;
@@ -1135,6 +1164,7 @@ UA_PubSubDataSetWriter_generateKeyFrameMessage(UA_Server *server,
     /* Loop over the fields */
     size_t counter = 0;
     UA_DataSetField *dsf;
+    
     TAILQ_FOREACH(dsf, &currentDataSet->fields, listEntry) {
 #ifdef UA_ENABLE_JSON_ENCODING
         /* Set the field name alias */
@@ -1173,6 +1203,22 @@ UA_PubSubDataSetWriter_generateKeyFrameMessage(UA_Server *server,
 
         counter++;
     }
+
+    EventQueueEntry *eqe = SIMPLEQ_FIRST(&dataSetWriter->eventQueue);
+    UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER, "Now iterating over events"); 
+
+    for(UA_UInt16 i=0; i < eqe->valuesSize; i++) {
+        UA_DataValue *dfv = &dataSetMessage->data.keyFrameData.dataSetFields[counter];
+        UA_DataValue_copy(&eqe->values[i], dfv);
+        UA_String_copy(&currentDataSet->config.config.event.selectedFields[i].browsePath->name, 
+            &dataSetMessage->data.keyFrameData.fieldNames[counter]);
+        counter++;
+    }
+    UA_Array_delete(eqe->values, eqe->valuesSize, &UA_TYPES[UA_TYPES_DATAVALUE]);
+    SIMPLEQ_REMOVE_HEAD(&dataSetWriter->eventQueue, listEntry);
+    dataSetWriter->eventQueueEntries--;
+    UA_free(eqe);
+
     return UA_STATUSCODE_GOOD;
 }
 

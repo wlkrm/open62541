@@ -149,12 +149,14 @@ UA_Server_addPublishedDataSet(UA_Server *server,
                      "PublishedDataSet creation failed. No config passed in.");
         return result;
     }
-
+    
+    /*
     if(publishedDataSetConfig->publishedDataSetType != UA_PUBSUB_DATASET_PUBLISHEDITEMS){
         UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
                      "PublishedDataSet creation failed. Unsupported PublishedDataSet type.");
         return result;
     }
+    */
 
     /* Create new PDS and add to UA_PubSubManager */
     UA_PublishedDataSet *newPDS = (UA_PublishedDataSet *)
@@ -191,7 +193,15 @@ UA_Server_addPublishedDataSet(UA_Server *server,
         res = UA_STATUSCODE_BADNOTSUPPORTED;
         break;
     case UA_PUBSUB_DATASET_PUBLISHEDEVENTS:
-        res = UA_STATUSCODE_BADNOTSUPPORTED;
+        newPDS->dataSetMetaData.configurationVersion.majorVersion = UA_PubSubConfigurationVersionTimeDifference();
+        newPDS->dataSetMetaData.configurationVersion.minorVersion = UA_PubSubConfigurationVersionTimeDifference();
+        newPDS->dataSetMetaData.dataSetClassId = UA_GUID_NULL;
+        res = UA_String_copy(&newConfig->name, &newPDS->dataSetMetaData.name);
+        if(res != UA_STATUSCODE_GOOD){
+            UA_Server_removeDataSetField(server, newPDS->identifier);
+            result.addResult = UA_STATUSCODE_BADINTERNALERROR;
+        }
+        newPDS->dataSetMetaData.description = UA_LOCALIZEDTEXT_ALLOC("", "");
         break;
     case UA_PUBSUB_DATASET_PUBLISHEDITEMS:
         newPDS->dataSetMetaData.configurationVersion.majorVersion =
@@ -230,8 +240,20 @@ UA_Server_addPublishedDataSet(UA_Server *server,
     server->pubSubManager.publishedDataSetsSize++;
 
 #ifdef UA_ENABLE_PUBSUB_INFORMATIONMODEL
-    /* Create representation and unique id */
-    addPublishedDataItemsRepresentation(server, newPDS);
+    switch(newConfig->publishedDataSetType){
+        case UA_PUBSUB_DATASET_PUBLISHEDITEMS_TEMPLATE:
+            addPublishedDataItemsRepresentation(server, newPDS);
+            break;
+        case UA_PUBSUB_DATASET_PUBLISHEDEVENTS_TEMPLATE:
+            // addPublishedEventsRepresentation(server, newPDS);
+            break;
+        case UA_PUBSUB_DATASET_PUBLISHEDEVENTS:
+            // addPublishedEventsRepresentation(server, newPDS);
+            break;
+        case UA_PUBSUB_DATASET_PUBLISHEDITEMS:
+            addPublishedDataItemsRepresentation(server, newPDS);
+            break;
+    }
 #else
     /* Generate unique nodeId */
     UA_PubSubManager_generateUniqueNodeId(&server->pubSubManager, &newPDS->identifier);

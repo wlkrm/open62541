@@ -114,6 +114,12 @@ typedef struct UA_DataSetWriterSample {
 } UA_DataSetWriterSample;
 #endif
 
+typedef struct EventQueueEntry {
+    UA_DataValue *values;
+    UA_UInt16 valuesSize;
+    SIMPLEQ_ENTRY(EventQueueEntry) listEntry;
+} EventQueueEntry;
+
 typedef struct UA_DataSetWriter {
     UA_PubSubComponentEnumType componentType;
     UA_DataSetWriterConfig config;
@@ -128,6 +134,8 @@ typedef struct UA_DataSetWriter {
     size_t lastSamplesCount;
     UA_DataSetWriterSample *lastSamples;
 #endif
+    UA_UInt16 eventQueueEntries;
+    SIMPLEQ_HEAD(EventQueue, EventQueueEntry) eventQueue;
     UA_UInt16 actualDataSetMessageSequenceCount;
     UA_Boolean configurationFrozen;
 } UA_DataSetWriter;

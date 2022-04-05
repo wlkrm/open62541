@@ -1080,8 +1080,8 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
     size_t dsmCount = 0;
     UA_StatusCode res = UA_STATUSCODE_GOOD;
     UA_STACKARRAY(UA_UInt16, dsWriterIds, writerGroup->writersCount);
-    UA_STACKARRAY(UA_DataSetMessage, dsmStore, writerGroup->writersCount);
     UA_STACKARRAY(UA_String, dsWriterNames, writerGroup->writersCount);
+    UA_STACKARRAY(UA_DataSetMessage, dsmStore, writerGroup->writersCount);
     UA_STACKARRAY(UA_DataSetFieldContentMask, dsWriterFieldMasks, writerGroup->writersCount);
     UA_DataSetWriter *dsw;
     LIST_FOREACH(dsw, &writerGroup->writers, listEntry) {
@@ -1099,85 +1099,131 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
         }
 
         /* Generate the DSM */
-        res = UA_DataSetWriter_generateDataSetMessage(server, &dsmStore[dsmCount], dsw);
-        if(res != UA_STATUSCODE_GOOD) {
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                         "PubSub Publish: DataSetMessage creation failed");
-            UA_DataSetWriter_setPubSubState(server, UA_PUBSUBSTATE_ERROR, dsw);
-            continue;
-        }
-#ifdef UA_ENABLE_JSON_ENCODING
-        /* Generate the DSMD */
-        UA_DataSetMetaData dataSetMetaData;
-        UA_DataSetMetaDataType *dsmdt = &pds->dataSetMetaData;
-        
-        res |= UA_DataSetWriter_generateDataSetMetaData(server, &dataSetMetaData, dsmdt, dsw, UA_FALSE);
-        if(res != UA_STATUSCODE_GOOD) {
-
-        } else {      
-            UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                "PubSub: DataSetMessageMetaData configuration changed.");  
-            switch(connection->config->publisherIdType) {
-                case UA_PUBSUB_PUBLISHERID_NUMERIC:
-                    dataSetMetaData.publisherIdType = UA_PUBLISHERDATATYPE_UINT32;
-                    dataSetMetaData.publisherId.publisherIdUInt32 = connection->config->publisherId.numeric;
-                    break;
-                case UA_PUBSUB_PUBLISHERID_STRING:
-                    dataSetMetaData.publisherIdType = UA_PUBLISHERDATATYPE_STRING;
-                    dataSetMetaData.publisherId.publisherIdString = connection->config->publisherId.string;
-                    break;
-                default:
-                    break;
-            }
-
-            res = sendNetworkMessageMetadataJson(connection, &dataSetMetaData, &dsw->config.dataSetWriterId, 1, &dsw->config.transportSettings);
+        if (dsw->config.eventQueueMaxSize == 0) {
+            res = UA_DataSetWriter_generateDataSetMessage(server, &dsmStore[dsmCount], dsw);
             if(res != UA_STATUSCODE_GOOD) {
-                UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                            "PubSub: DataSetMessageMetaData sending failed");
+                UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                            "PubSub Publish: DataSetMessage creation failed");
+                UA_DataSetWriter_setPubSubState(server, UA_PUBSUBSTATE_ERROR, dsw);
+                continue;
             }
-            UA_DataSetMetaData_clear(&dataSetMetaData);         
-        }
-#endif
-        /* There is no promoted field and we can batch dsm. So do the batching. */
-        if(((pds->promotedFieldsCount == 0 && pds->config.sendViaWriterGroupTopic) &&
-             maxDSM > 1)) {
-            dsWriterIds[dsmCount] = dsw->config.dataSetWriterId; 
-            dsWriterNames[dsmCount] = dsw->config.name;
-            dsWriterFieldMasks[dsmCount] = dsw->config.dataSetFieldContentMask;
-            dsmCount++;
-            continue;
-        }
+    #ifdef UA_ENABLE_JSON_ENCODING
+            /* Generate the DSMD */
+            UA_DataSetMetaData dataSetMetaData;
+            UA_DataSetMetaDataType *dsmdt = &pds->dataSetMetaData;
+            
+            res |= UA_DataSetWriter_generateDataSetMetaData(server, &dataSetMetaData, dsmdt, dsw, UA_FALSE);
+            if(res != UA_STATUSCODE_GOOD) {
 
-        /* Send right away */
-        if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_UADP){
-            res = sendNetworkMessage(connection, writerGroup, &dsmStore[dsmCount],
-                                     &dsw->config.dataSetWriterId, 1,
-                                     &writerGroup->config.messageSettings,
-                                     &writerGroup->config.transportSettings);
-        } else { /* if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_JSON) */
-#ifdef UA_ENABLE_JSON_ENCODING
-            res = sendNetworkMessageJson(connection, &dsmStore[dsmCount],
-                                         &dsw->config.dataSetWriterId, &dsw->config.name, 1,
-                                         &dsw->config.transportSettings, 
-                                         &dsw->config.dataSetFieldContentMask);
-#else
-            res = UA_STATUSCODE_BADNOTSUPPORTED;
-#endif
-        }
+            } else {      
+                UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                    "PubSub: DataSetMessageMetaData configuration changed.");  
+                switch(connection->config->publisherIdType) {
+                    case UA_PUBSUB_PUBLISHERID_NUMERIC:
+                        dataSetMetaData.publisherIdType = UA_PUBLISHERDATATYPE_UINT32;
+                        dataSetMetaData.publisherId.publisherIdUInt32 = connection->config->publisherId.numeric;
+                        break;
+                    case UA_PUBSUB_PUBLISHERID_STRING:
+                        dataSetMetaData.publisherIdType = UA_PUBLISHERDATATYPE_STRING;
+                        dataSetMetaData.publisherId.publisherIdString = connection->config->publisherId.string;
+                        break;
+                    default:
+                        break;
+                }
 
-        if(res != UA_STATUSCODE_GOOD) {
-            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                         "PubSub Publish: Could not send a NetworkMessage");
-            UA_DataSetWriter_setPubSubState(server, UA_PUBSUBSTATE_ERROR, dsw);
-        }
-
-        /* Clean up */
-        if(writerGroup->config.rtLevel == UA_PUBSUB_RT_DIRECT_VALUE_ACCESS) {
-            for(size_t i = 0; i < dsmStore[dsmCount].data.keyFrameData.fieldCount; ++i) {
-                dsmStore[dsmCount].data.keyFrameData.dataSetFields[i].value.data = NULL;
+                res = sendNetworkMessageMetadataJson(connection, &dataSetMetaData, &dsw->config.dataSetWriterId, 1, &dsw->config.transportSettings);
+                if(res != UA_STATUSCODE_GOOD) {
+                    UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                                "PubSub: DataSetMessageMetaData sending failed");
+                }
+                UA_DataSetMetaData_clear(&dataSetMetaData);         
             }
-        }
-        UA_DataSetMessage_clear(&dsmStore[dsmCount]);
+    #endif
+            /* There is no promoted field and we can batch dsm. So do the batching. */
+            if(((pds->promotedFieldsCount == 0 && pds->config.sendViaWriterGroupTopic) &&
+                maxDSM > 1)) {
+                dsWriterIds[dsmCount] = dsw->config.dataSetWriterId; 
+                dsWriterNames[dsmCount] = dsw->config.name;
+                dsWriterFieldMasks[dsmCount] = dsw->config.dataSetFieldContentMask;
+                dsmCount++;
+                continue;
+            }
+
+            /* Send right away */
+            if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_UADP){
+                res = sendNetworkMessage(connection, writerGroup, &dsmStore[dsmCount],
+                                        &dsw->config.dataSetWriterId, 1,
+                                        &writerGroup->config.messageSettings,
+                                        &writerGroup->config.transportSettings);
+            } else { /* if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_JSON) */
+    #ifdef UA_ENABLE_JSON_ENCODING
+                res = sendNetworkMessageJson(connection, &dsmStore[dsmCount],
+                    &dsw->config.dataSetWriterId, &dsw->config.name, 1,
+                    &dsw->config.transportSettings, 
+                    &dsw->config.dataSetFieldContentMask);
+    #else
+                res = UA_STATUSCODE_BADNOTSUPPORTED;
+    #endif
+            }
+
+            if(res != UA_STATUSCODE_GOOD) {
+                UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                            "PubSub Publish: Could not send a NetworkMessage");
+                UA_DataSetWriter_setPubSubState(server, UA_PUBSUBSTATE_ERROR, dsw);
+            }
+
+            /* Clean up */
+            if(writerGroup->config.rtLevel == UA_PUBSUB_RT_DIRECT_VALUE_ACCESS) {
+                for(size_t i = 0; i < dsmStore[dsmCount].data.keyFrameData.fieldCount; ++i) {
+                    dsmStore[dsmCount].data.keyFrameData.dataSetFields[i].value.data = NULL;
+                }
+            }
+            UA_DataSetMessage_clear(&dsmStore[dsmCount]);
+        } else if (dsw->eventQueueEntries > 0) {
+            size_t eventCount = 0;
+            UA_STACKARRAY(UA_DataSetMessage, dsmEventStore, dsw->eventQueueEntries);
+            UA_STACKARRAY(UA_UInt16, dsEventWriterIds, dsw->eventQueueEntries);
+            UA_STACKARRAY(UA_String, dsEventWriterNames, dsw->eventQueueEntries);        
+            
+            for (int i = 0; i < dsw->eventQueueEntries; i++) {
+                res = UA_DataSetWriter_generateDataSetMessage(server, &dsmEventStore[i], dsw);
+                dsEventWriterIds[eventCount] = dsw->config.dataSetWriterId; 
+                dsEventWriterNames[eventCount] = dsw->config.name;
+                eventCount++;
+            }
+            if(res != UA_STATUSCODE_GOOD) {
+                UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                            "PubSub Publish: DataSetMessage creation failed");
+                UA_DataSetWriter_setPubSubState(server, UA_PUBSUBSTATE_ERROR, dsw);
+                continue;
+            }
+            size_t i = 0;
+            while(i < eventCount) {
+                /* How many dsm in this iteration? */
+                UA_Byte nmDsmCount = maxDSM;
+                if(i + nmDsmCount > eventCount) {
+                    nmDsmCount = (UA_Byte)(eventCount - i);
+                }
+
+                if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_UADP){
+                    res = sendNetworkMessage(connection, writerGroup, &dsmEventStore[i],
+                                            &dsEventWriterIds[i], nmDsmCount,
+                                            &writerGroup->config.messageSettings,
+                                            &writerGroup->config.transportSettings);
+                } else { /* if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_JSON) */
+        #ifdef UA_ENABLE_JSON_ENCODING
+                    res = sendNetworkMessageJson(connection, &dsmEventStore[i],
+                                                &dsEventWriterIds[i], &dsEventWriterNames[i], nmDsmCount,
+                                                &dsw->config.transportSettings,
+                                                &dsWriterFieldMasks[i]);
+        #else
+                    res = UA_STATUSCODE_BADNOTSUPPORTED;
+        #endif
+                }
+
+                /* Forward the position for the next iteration */
+                i += nmDsmCount;
+                }
     }
 
     /* Send the NetworkMessages with batched DataSetMessages */
@@ -1224,6 +1270,7 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
     /* Clean up DSM */
     for(i = 0; i < dsmCount; i++)
         UA_DataSetMessage_clear(&dsmStore[i]);
+    }
 }
 
 /* Add new publishCallback. The first execution is triggered directly after

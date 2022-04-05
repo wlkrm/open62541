@@ -271,6 +271,135 @@ static const UA_NodeId isInFolderReferences[2] =
     {{0, UA_NODEIDTYPE_NUMERIC, {UA_NS0ID_ORGANIZES}},
      {0, UA_NODEIDTYPE_NUMERIC, {UA_NS0ID_HASCOMPONENT}}};
 
+/* Part 4: 7.4.4.5 SimpleAttributeOperand
+ * The clause can point to any attribute of nodes. Either a child of the event
+ * node and also the event type. */
+static UA_StatusCode
+resolveSimpleAttributeOperand(UA_Server *server, UA_Session *session, const UA_NodeId *origin,
+                              const UA_SimpleAttributeOperand *sao, UA_Variant *value) {
+    /* Prepare the ReadValueId */
+    UA_ReadValueId rvi;
+    UA_ReadValueId_init(&rvi);
+    rvi.indexRange = sao->indexRange;
+    rvi.attributeId = sao->attributeId;
+
+    UA_DataValue v;
+
+    if(sao->browsePathSize == 0) {
+        /* If this list (browsePath) is empty, the Node is the instance of the
+         * TypeDefinition. */
+        rvi.nodeId = sao->typeDefinitionId;
+
+        /* A Condition is an indirection. Look up the target node. */
+        /* TODO: check for Branches! One Condition could have multiple Branches */
+        UA_NodeId conditionTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE);
+        if(UA_NodeId_equal(&sao->typeDefinitionId, &conditionTypeId)) {
+#ifdef UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
+            UA_StatusCode res = UA_getConditionId(server, origin, &rvi.nodeId);
+            if(res != UA_STATUSCODE_GOOD)
+                return res;
+#else
+            return UA_STATUSCODE_BADNOTSUPPORTED;
+#endif
+        }
+
+        v = UA_Server_readWithSession(server, session, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
+
+    } else {
+        /* Resolve the browse path, starting from the event-source (and not the
+         * typeDefinitionId). */
+        UA_BrowsePathResult bpr =
+            browseSimplifiedBrowsePath(server, *origin, sao->browsePathSize, sao->browsePath);
+        if(bpr.targetsSize == 0 && bpr.statusCode == UA_STATUSCODE_GOOD)
+            bpr.statusCode = UA_STATUSCODE_BADNOTFOUND;
+        if(bpr.statusCode != UA_STATUSCODE_GOOD) {
+            UA_StatusCode res = bpr.statusCode;
+            UA_BrowsePathResult_clear(&bpr);
+            return res;
+        }
+
+        /* Use the first match */
+        rvi.nodeId = bpr.targets[0].targetId.nodeId;
+        v = UA_Server_readWithSession(server, session, &rvi, UA_TIMESTAMPSTORETURN_NEITHER);
+        UA_BrowsePathResult_clear(&bpr);
+    }
+
+    /* Move the result to the output */
+    if(v.status == UA_STATUSCODE_GOOD && v.hasValue)
+        *value = v.value;
+    else
+        UA_Variant_clear(&v.value);
+    return v.status;
+}
+
+
+static UA_StatusCode
+insertDataValueIntoDSWQueue(UA_Server *server, UA_DataSetWriter *dsw, UA_DataValue *value, UA_UInt16 valueSize)  {
+    UA_StatusCode res = UA_STATUSCODE_GOOD;
+    if(dsw->eventQueueEntries == dsw->config.eventQueueMaxSize){
+        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                     "EventQueueMaxSize reached %u / %lu.",
+                       dsw->eventQueueEntries, dsw->config.eventQueueMaxSize);
+
+        /* remove oldest entry to make space for new one*/
+        EventQueueEntry *eventQueueEntry = SIMPLEQ_FIRST(&dsw->eventQueue);
+        SIMPLEQ_REMOVE_HEAD(&dsw->eventQueue, listEntry);
+        dsw->eventQueueEntries--;
+        UA_Array_delete(&eventQueueEntry->values, eventQueueEntry->valuesSize, &UA_TYPES[UA_TYPES_DATAVALUE]);
+        UA_free(eventQueueEntry);
+    }
+
+    EventQueueEntry *entry = (EventQueueEntry *)malloc(sizeof(EventQueueEntry));
+    if(!entry)
+        return UA_STATUSCODE_BADOUTOFMEMORY;
+
+    res = UA_Array_copy(value, valueSize, (void **) &entry->values, &UA_TYPES[UA_TYPES_DATAVALUE]);
+    entry->valuesSize = valueSize;
+
+    if(dsw->eventQueueEntries != 0) {
+        SIMPLEQ_INSERT_TAIL(&dsw->eventQueue, entry, listEntry);
+    } else {
+        SIMPLEQ_INIT(&dsw->eventQueue);
+        SIMPLEQ_INSERT_TAIL(&dsw->eventQueue, entry, listEntry);
+    }
+    dsw->eventQueueEntries++;
+    return res;
+}
+
+/* Adds all DataSetFields of the given PublishedDataSet to the eventQueue of the given DataSetWriter*/
+static UA_StatusCode
+addEventToDataSetWriter(UA_Server *server, UA_NodeId eventNodeId,
+                        UA_DataSetWriter *dsw, UA_PublishedDataSet *publishedDataSet) {
+    if(!publishedDataSet || !dsw)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+    UA_SimpleAttributeOperand selectedField;
+    UA_STACKARRAY(UA_DataValue, dataValues, publishedDataSet->config.config.event.selectedFieldsSize);
+     
+    for(size_t i = 0; i < publishedDataSet->config.config.event.selectedFieldsSize; i++){
+        selectedField = publishedDataSet->config.config.event.selectedFields[i];
+
+        retval = resolveSimpleAttributeOperand(server, &server->adminSession, &eventNodeId,
+                                               &selectedField, &dataValues[i].value);
+        if(retval != UA_STATUSCODE_GOOD){
+            UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                         "SimpleAttributeOperand wasn't able to be resolved as a Variant."
+                         " StatusCode %s", UA_StatusCode_name(retval));
+            return retval;
+        };
+    }
+
+    retval |= insertDataValueIntoDSWQueue(server, dsw, dataValues, (UA_UInt16) publishedDataSet->config.config.event.selectedFieldsSize);
+    if(retval != UA_STATUSCODE_GOOD) {
+        UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
+            "Inserting DataValue into DSW-queue failed. "
+            "StatusCode %s", UA_StatusCode_name(retval));
+        return retval;
+    }
+    return retval;
+}
+
 UA_StatusCode
 triggerEvent(UA_Server *server, const UA_NodeId eventNodeId,
              const UA_NodeId origin, UA_ByteString *outEventId,
@@ -410,6 +539,46 @@ triggerEvent(UA_Server *server, const UA_NodeId eventNodeId,
         if(server->config.historyDatabase.setEvent)
             setHistoricalEvent(server, &origin, &emitNodes[i].nodeId, &eventNodeId);
 #endif
+    }
+
+       /*Bubble up*/
+    for(size_t i = 0; i < emitNodesSize; i++) {
+        /* Get the node */
+        const UA_ObjectNode *node = (const UA_ObjectNode*)
+            UA_NODESTORE_GET(server, &emitNodes[i].nodeId);
+        if(!node)
+            continue;
+
+        /* Only consider objects */
+        if(node->head.nodeClass != UA_NODECLASS_OBJECT) {
+            UA_NODESTORE_RELEASE(server, (const UA_Node*)node);
+            continue;
+        }
+
+        PublishedDataSetEventEntry *entry;
+        LIST_FOREACH(entry, &server->pubSubManager.publishedDataSetEvents, listEntry){
+            if(UA_NodeId_equal(&entry->pds->config.config.event.eventNotfier, &emitNodes[i].nodeId)){              
+                UA_EventFilter ef;
+                UA_EventFilter_init(&ef);
+                UA_EventFieldList efl;
+                UA_EventFilterResult result;
+                ef.whereClause = entry->pds->config.config.event.filter;
+                ef.selectClauses = entry->pds->config.config.event.selectedFields;
+                ef.selectClausesSize = entry->pds->config.config.event.selectedFieldsSize;
+
+                filterEvent(server, &server->adminSession, &eventNodeId, &ef, &efl, &result);
+
+                retval = addEventToDataSetWriter(server, eventNodeId, entry->dsw, entry->pds);
+                if(retval != UA_STATUSCODE_GOOD) {
+                    UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                                   "Events: Could not add the event to the DataSetWriter with StatusCode %s",
+                                   UA_StatusCode_name(retval));
+                    retval = UA_STATUSCODE_GOOD;
+                }
+            }
+        }
+
+        UA_NODESTORE_RELEASE(server, (const UA_Node*)node);
     }
 
     /* Delete the node representation of the event */
