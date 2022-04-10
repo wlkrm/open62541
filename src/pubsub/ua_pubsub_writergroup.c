@@ -1181,14 +1181,15 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
             UA_DataSetMessage_clear(&dsmStore[dsmCount]);
         } else if (dsw->eventQueueEntries > 0) {
             size_t eventCount = 0;
-            UA_STACKARRAY(UA_DataSetMessage, dsmEventStore, dsw->eventQueueEntries);
-            UA_STACKARRAY(UA_UInt16, dsEventWriterIds, dsw->eventQueueEntries);
-            UA_STACKARRAY(UA_String, dsEventWriterNames, dsw->eventQueueEntries);        
+            UA_UInt16 eventQueueEntries = dsw->eventQueueEntries; 
+            UA_STACKARRAY(UA_DataSetMessage, dsmEventStore, eventQueueEntries);
+            UA_STACKARRAY(UA_UInt16, dsEventWriterIds, eventQueueEntries);
+            UA_STACKARRAY(UA_String, dsEventWriterNames, eventQueueEntries);        
             
-            for (int i = 0; i < dsw->eventQueueEntries; i++) {
+            for (int i = 0; i < eventQueueEntries; i++) {
                 res = UA_DataSetWriter_generateDataSetMessage(server, &dsmEventStore[i], dsw);
-                dsEventWriterIds[eventCount] = dsw->config.dataSetWriterId; 
-                dsEventWriterNames[eventCount] = dsw->config.name;
+                dsEventWriterIds[i] = dsw->config.dataSetWriterId; 
+                dsEventWriterNames[i] = dsw->config.name;
                 eventCount++;
             }
             if(res != UA_STATUSCODE_GOOD) {
@@ -1223,9 +1224,10 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
 
                 /* Forward the position for the next iteration */
                 i += nmDsmCount;
-                }
+            }
+        }
     }
-
+    
     /* Send the NetworkMessages with batched DataSetMessages */
     size_t i = 0;
     while(i < dsmCount) {
@@ -1269,8 +1271,7 @@ UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup) {
 
     /* Clean up DSM */
     for(i = 0; i < dsmCount; i++)
-        UA_DataSetMessage_clear(&dsmStore[i]);
-    }
+        UA_DataSetMessage_clear(&dsmStore[i]);    
 }
 
 /* Add new publishCallback. The first execution is triggered directly after

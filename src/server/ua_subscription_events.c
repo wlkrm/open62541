@@ -345,7 +345,7 @@ insertDataValueIntoDSWQueue(UA_Server *server, UA_DataSetWriter *dsw, UA_DataVal
         EventQueueEntry *eventQueueEntry = SIMPLEQ_FIRST(&dsw->eventQueue);
         SIMPLEQ_REMOVE_HEAD(&dsw->eventQueue, listEntry);
         dsw->eventQueueEntries--;
-        UA_Array_delete(&eventQueueEntry->values, eventQueueEntry->valuesSize, &UA_TYPES[UA_TYPES_DATAVALUE]);
+        UA_Array_delete(eventQueueEntry->values, eventQueueEntry->valuesSize, &UA_TYPES[UA_TYPES_DATAVALUE]);
         UA_free(eventQueueEntry);
     }
 
@@ -375,8 +375,9 @@ addEventToDataSetWriter(UA_Server *server, UA_NodeId eventNodeId,
 
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     UA_SimpleAttributeOperand selectedField;
-    UA_STACKARRAY(UA_DataValue, dataValues, publishedDataSet->config.config.event.selectedFieldsSize);
-     
+    UA_DataValue * dataValues = (UA_DataValue *) UA_Array_new(publishedDataSet->config.config.event.selectedFieldsSize, 
+        &UA_TYPES[UA_TYPES_DATAVALUE]);
+
     for(size_t i = 0; i < publishedDataSet->config.config.event.selectedFieldsSize; i++){
         selectedField = publishedDataSet->config.config.event.selectedFields[i];
 
@@ -565,19 +566,23 @@ triggerEvent(UA_Server *server, const UA_NodeId eventNodeId,
                 ef.whereClause = entry->pds->config.config.event.filter;
                 ef.selectClauses = entry->pds->config.config.event.selectedFields;
                 ef.selectClausesSize = entry->pds->config.config.event.selectedFieldsSize;
-
-                filterEvent(server, &server->adminSession, &eventNodeId, &ef, &efl, &result);
-
-                retval = addEventToDataSetWriter(server, eventNodeId, entry->dsw, entry->pds);
+                retval = filterEvent(server, &server->adminSession, &eventNodeId, &ef, &efl, &result);
                 if(retval != UA_STATUSCODE_GOOD) {
                     UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                                   "Events: Could not add the event to the DataSetWriter with StatusCode %s",
+                                   "Events: Could not filter the event to the DataSetWriter with StatusCode %s",
                                    UA_StatusCode_name(retval));
                     retval = UA_STATUSCODE_GOOD;
+                } else {
+                    retval = addEventToDataSetWriter(server, eventNodeId, entry->dsw, entry->pds);
+                    if(retval != UA_STATUSCODE_GOOD) {
+                        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                                    "Events: Could not add the event to the DataSetWriter with StatusCode %s",
+                                    UA_StatusCode_name(retval));
+                        retval = UA_STATUSCODE_GOOD;
+                    }
                 }
             }
         }
-
         UA_NODESTORE_RELEASE(server, (const UA_Node*)node);
     }
 

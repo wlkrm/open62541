@@ -186,7 +186,8 @@ ofTypeOperator(UA_FilterOperatorContext *ctx) {
         return UA_STATUSCODE_BADINTERNALERROR;
     }
     /* check if the eventtype-nodeid is equal to the given oftype argument */
-    result = UA_NodeId_equal((UA_NodeId*) typeNodeIdVariant.data, literalOperandNodeId);
+    UA_NodeId *typeOf = (UA_NodeId *) typeNodeIdVariant.data;
+    result = UA_NodeId_equal(typeOf, literalOperandNodeId);
     /* check if the eventtype-nodeid is a subtype of the given oftype argument */
     if(!result)
         result = isNodeInTree_singleRef(ctx->server,

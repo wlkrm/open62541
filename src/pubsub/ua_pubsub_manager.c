@@ -248,7 +248,8 @@ UA_Server_addPublishedDataSet(UA_Server *server,
             // addPublishedEventsRepresentation(server, newPDS);
             break;
         case UA_PUBSUB_DATASET_PUBLISHEDEVENTS:
-            // addPublishedEventsRepresentation(server, newPDS);
+            // TODO: addPublishedEventsRepresentation(server, newPDS);
+            addPublishedDataItemsRepresentation(server, newPDS);
             break;
         case UA_PUBSUB_DATASET_PUBLISHEDITEMS:
             addPublishedDataItemsRepresentation(server, newPDS);

@@ -860,7 +860,7 @@ UA_Server_addDataSetWriter(UA_Server *server,
         pdse->dsw = newDataSetWriter;
 
         /* Insert into the queue of the manager */
-        if(server->pubSubManager.publishedDataSetsSize != 0) {
+        if(server->pubSubManager.publishedDataSetEventsSize != 0) {
             LIST_INSERT_HEAD(&server->pubSubManager.publishedDataSetEvents,
                             pdse, listEntry);
         } else {
@@ -868,7 +868,7 @@ UA_Server_addDataSetWriter(UA_Server *server,
             LIST_INSERT_HEAD(&server->pubSubManager.publishedDataSetEvents,
                             pdse, listEntry);
         }
-        server->pubSubManager.publishedDataSetsSize++;
+        server->pubSubManager.publishedDataSetEventsSize++;
     }
     
 #ifdef UA_ENABLE_JSON_ENCODING
@@ -1204,20 +1204,21 @@ UA_PubSubDataSetWriter_generateKeyFrameMessage(UA_Server *server,
         counter++;
     }
 
+    if (currentDataSet->fieldSize == fieldNo) return UA_STATUSCODE_GOOD;
     EventQueueEntry *eqe = SIMPLEQ_FIRST(&dataSetWriter->eventQueue);
-    UA_LOG_INFO(&server->config.logger, UA_LOGCATEGORY_SERVER, "Now iterating over events"); 
-
-    for(UA_UInt16 i=0; i < eqe->valuesSize; i++) {
-        UA_DataValue *dfv = &dataSetMessage->data.keyFrameData.dataSetFields[counter];
-        UA_DataValue_copy(&eqe->values[i], dfv);
-        UA_String_copy(&currentDataSet->config.config.event.selectedFields[i].browsePath->name, 
-            &dataSetMessage->data.keyFrameData.fieldNames[counter]);
-        counter++;
+    if(eqe) {
+        for(UA_UInt16 i=0; i < eqe->valuesSize; i++) {
+            UA_DataValue *dfv = &dataSetMessage->data.keyFrameData.dataSetFields[counter];
+            UA_DataValue_copy(&eqe->values[i], dfv);
+            UA_String_copy(&currentDataSet->config.config.event.selectedFields[i].browsePath->name, 
+                &dataSetMessage->data.keyFrameData.fieldNames[counter]);
+            counter++;
+        }
+        UA_Array_delete(eqe->values, eqe->valuesSize, &UA_TYPES[UA_TYPES_DATAVALUE]);
+        SIMPLEQ_REMOVE_HEAD(&dataSetWriter->eventQueue, listEntry);
+        dataSetWriter->eventQueueEntries--;
+        UA_free(eqe);
     }
-    UA_Array_delete(eqe->values, eqe->valuesSize, &UA_TYPES[UA_TYPES_DATAVALUE]);
-    SIMPLEQ_REMOVE_HEAD(&dataSetWriter->eventQueue, listEntry);
-    dataSetWriter->eventQueueEntries--;
-    UA_free(eqe);
 
     return UA_STATUSCODE_GOOD;
 }
