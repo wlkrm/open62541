@@ -1537,6 +1537,43 @@ UA_DataSetWriter_generateDataSetMetaData(UA_Server *server,
         dataSetMetaData->dataSetMetaData.fields[dsfnumber].properties = properties;
         dataSetMetaData->dataSetMetaData.fields[dsfnumber].propertiesSize = propertiesCount;
     }
+    
+    size_t fieldsSize = currentDataSet->config.config.event.selectedFieldsSize;
+    if (fieldsSize > 0) {
+        dataSetMetaData->dataSetMetaData.fieldsSize += fieldsSize;
+        dataSetMetaData->dataSetMetaData.fields = 
+            (UA_FieldMetaData*) UA_Array_new(fieldsSize, &UA_TYPES[UA_TYPES_FIELDMETADATA]);
+        for(size_t i = 0; i < fieldsSize; i++) {
+            UA_FieldMetaData *fmd = &dataSetMetaData->dataSetMetaData.fields[i];
+            memset(fmd, 0, sizeof(UA_FieldMetaData));
+            UA_String_copy(&currentDataSet->config.config.event.selectedFields[i].browsePath->name, &fmd->name);
+            UA_RelativePathElement rpe;
+            UA_RelativePathElement_init(&rpe);
+            rpe.referenceTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_HASPROPERTY);
+            rpe.isInverse = false;
+            rpe.includeSubtypes = false;
+            UA_QualifiedName_copy(currentDataSet->config.config.event.selectedFields[i].browsePath, &rpe.targetName);
+            UA_BrowsePath bp;
+            UA_BrowsePath_init(&bp);
+            bp.startingNode = 
+                currentDataSet->config.config.event.selectedFields[i].typeDefinitionId;
+            bp.relativePath.elementsSize = 1;
+            bp.relativePath.elements = &rpe;
+            UA_BrowsePathResult bpr =
+                UA_Server_translateBrowsePathToNodeIds(server, &bp);
+            if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
+                return bpr.statusCode;
+            }
+            UA_Server_readDataType(server, bpr.targets[0].targetId.nodeId, &fmd->dataType);
+            const UA_DataType *currentDataType =
+                UA_findDataTypeWithCustom(&fmd->dataType, server->config.customDataTypes);          
+            if(currentDataType && currentDataType->typeKind <= UA_DATATYPEKIND_ENUM) {
+                fmd->builtInType = (UA_Byte)currentDataType->typeKind;
+            }
+            UA_BrowsePathResult_clear(&bpr);
+            fmd->dataSetFieldId = UA_PubSubManager_generateUniqueGuid(server);
+        }
+    }
     return UA_STATUSCODE_GOOD;
 }
 
