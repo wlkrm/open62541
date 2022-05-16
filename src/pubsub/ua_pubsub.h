@@ -7,6 +7,7 @@
  * Copyright (c) 2020 Yannick Wallerer, Siemens AG
  * Copyright (c) 2020 Thomas Fischer, Siemens AG
  * Copyright (c) 2021 Fraunhofer IOSB (Author: Jan Hermes)
+ * Copyright (c) 2022 ISW (for umati and VDW e.V.) (Author: Moritz Walker)
  */
 
 #ifndef UA_PUBSUB_H_
@@ -149,6 +150,13 @@ UA_StatusCode
 UA_DataSetWriter_generateDataSetMessage(UA_Server *server,
                                         UA_DataSetMessage *dataSetMessage,
                                         UA_DataSetWriter *dataSetWriter);
+
+UA_StatusCode
+UA_DataSetWriter_generateDataSetMetaData(UA_Server *server,
+                                        UA_DataSetMetaData *dataSetMetaData,
+                                        UA_DataSetMetaDataType *dataSetMetaDataType, 
+                                        UA_DataSetWriter *dataSetWriter,
+                                        UA_Boolean ignoreVersion);
 
 UA_StatusCode
 UA_DataSetWriter_remove(UA_Server *server, UA_WriterGroup *linkedWriterGroup,
@@ -340,6 +348,10 @@ UA_WriterGroup_addPublishCallback(UA_Server *server, UA_WriterGroup *writerGroup
 
 void
 UA_WriterGroup_publishCallback(UA_Server *server, UA_WriterGroup *writerGroup);
+
+UA_StatusCode
+sendNetworkMessageMetadataJson(UA_PubSubConnection *connection, UA_DataSetMetaData *dsmd,
+                       UA_UInt16 *writerIds, UA_Byte dsmdCount, UA_ExtensionObject *dataSetWriterTransportSettings);
 
 /*********************************************************/
 /*               SubscribeValues handling                */

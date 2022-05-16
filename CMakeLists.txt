@@ -1227,7 +1227,7 @@ else()
 
     if(UA_ENABLE_PUBSUB)
         list(APPEND UA_FILE_DATATYPES ${PROJECT_SOURCE_DIR}/tools/schema/datatypes_pubsub.txt)
-        if(UA_ENABLE_PUBSUB_INFORMATIONMODEL)
+        if(UA_ENABLE_PUBSUB_INFORMATIONMODEL OR UA_ENABLE_PUBSUB_MQTT_METADATA)
             list(APPEND UA_FILE_NODESETS ${PROJECT_SOURCE_DIR}/tools/schema/Opc.Ua.NodeSet2.PubSubMinimal.xml)
         endif()
     endif()
