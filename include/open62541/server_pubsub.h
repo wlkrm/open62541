@@ -5,6 +5,7 @@
  * Copyright (c) 2017-2018 Fraunhofer IOSB (Author: Andreas Ebner)
  * Copyright (c) 2019 Kalycito Infotech Private Limited
  * Copyright (c) 2021 Fraunhofer IOSB (Author: Jan Hermes)
+ * Copyright (c) 2022 ISW (for umati and VDW e.V.) (Author: Moritz Walker)
  */
 
 #ifndef UA_SERVER_PUBSUB_H
@@ -287,6 +288,7 @@ typedef struct {
 typedef struct {
     UA_String name;
     UA_PublishedDataSetType publishedDataSetType;
+    UA_Boolean sendViaWriterGroupTopic;
     union {
         /* The UA_PUBSUB_DATASET_PUBLISHEDITEMS has currently no additional members
          * and thus no dedicated config structure.*/

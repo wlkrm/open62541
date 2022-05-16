@@ -8,6 +8,7 @@
  * Copyright (c) 2020 Yannick Wallerer, Siemens AG
  * Copyright (c) 2020 Thomas Fischer, Siemens AG
  * Copyright (c) 2021 Fraunhofer IOSB (Author: Jan Hermes)
+ * Copyright (c) 2022 ISW (for umati and VDW e.V.) (Author: Moritz Walker)
  */
 
 #include <open62541/server_pubsub.h>
@@ -1109,8 +1110,8 @@ setErrorStateForDataSetWritersWithIds(UA_Server *server, UA_WriterGroup *writerG
 
 static UA_INLINE UA_Boolean
 allowsBatching(UA_PublishedDataSet *publishedDataSet, UA_Byte maxDSM) {
-    /* There is no promoted field and we can batch dsm. So do the batching. */
-    return publishedDataSet->promotedFieldsCount == 0 && maxDSM > 1;
+    /* There is no promoted field or batching is configured and we can batch dsm. So do the batching. */
+    return (publishedDataSet->promotedFieldsCount == 0 && publishedDataSet->config.sendViaWriterGroupTopic) && maxDSM > 1;
 }
 
 static UA_INLINE UA_StatusCode
