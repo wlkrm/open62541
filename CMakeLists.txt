@@ -430,6 +430,15 @@ if(UA_ENABLE_PUBSUB_MQTT)
     endif()
 endif()
 
+option(UA_ENABLE_PUBSUB_MQTT_METADATA "Enable publishing of DataSetMetaData via mqtt" OFF)
+mark_as_advanced(UA_ENABLE_PUBSUB_MQTT_METADATA)
+if(UA_ENABLE_PUBSUB_MQTT_METADATA)
+    if(NOT UA_ENABLE_PUBSUB_MQTT)
+        message(FATAL_ERROR "Publishing of Metadata via mqtt cannot be used without UA_ENABLE_PUBSUB_MQTT.")
+    endif()
+    set(UA_ENABLE_PUBSUB_MQTT_METADATA ON)
+endif()
+
 option(UA_ENABLE_MQTT_TLS_OPENSSL "Enable TLS support for publish/subscribe with mqtt (use OpenSSL)" OFF)
 mark_as_advanced(UA_ENABLE_MQTT_TLS_OPENSSL)
 
@@ -1107,6 +1116,9 @@ endif()
 if(UA_ENABLE_JSON_ENCODING)
     if(UA_ENABLE_PUBSUB)
         list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_networkmessage_json.c)
+        if(UA_ENABLE_PUBSUB_MQTT_METADATA)
+            list(APPEND lib_sources ${PROJECT_SOURCE_DIR}/src/pubsub/ua_pubsub_datasetmetadata_json.c)
+        endif()
     endif()
     list(APPEND internal_headers ${PROJECT_SOURCE_DIR}/deps/jsmn/jsmn.h
                                  ${PROJECT_SOURCE_DIR}/deps/string_escape.h
