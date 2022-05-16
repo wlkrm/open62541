@@ -1287,7 +1287,7 @@ publishMetadata(UA_Server* server, UA_PubSubConnection* connection, UA_DataSetWr
             default:
                 break;
         }
-
+#ifdef UA_ENABLE_JSON_ENCODING
         res = sendNetworkMessageMetadataJson(connection, &dataSetMetaData, &dsw->config.dataSetWriterId, 1, &dsw->config.transportSettings);
         if(res != UA_STATUSCODE_GOOD) {
             UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,

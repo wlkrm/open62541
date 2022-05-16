@@ -151,8 +151,10 @@ UA_NetworkMessage_encodeJson_internal(const UA_NetworkMessage* src, CtxJson *ctx
     /* currently only ua-data is supported, no discovery message implemented */
     switch (src->networkMessageType){
         case UA_NETWORKMESSAGE_DATASETMETADATA:
+#ifdef UA_ENABLE_PUBSUB_MQTT_METADATA
             rv |= UA_DataSetMetaData_encodeJson_internal(
                 src->payload.metaDataPayload.dataSetMetaData, (void*) ctx);
+#endif
             break;
         
         case UA_NETWORKMESSAGE_DATASET:
