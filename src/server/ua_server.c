@@ -17,6 +17,7 @@
  *    Copyright 2019 (c) Kalycito Infotech Private Limited
  *    Copyright 2021 (c) Fraunhofer IOSB (Author: Jan Hermes)
  *    Copyright 2022 (c) Fraunhofer IOSB (Author: Andreas Ebner)
+ *    Copyright (c) 2022 ISW (for umati and VDW e.V.) (Author: Moritz Walker)
  */
 
 #include "ua_server_internal.h"
@@ -822,7 +823,7 @@ UA_Server_run_iterate(UA_Server *server, UA_Boolean waitInternal) {
     TAILQ_FOREACH(connection, &server->pubSubManager.connections, listEntry){
         UA_PubSubConnection *ps = connection;
         if(ps && ps->channel->yield){
-            ps->channel->yield(ps->channel, 0);
+            ps->channel->yield(ps->channel, 10);
         }
     }
 #endif
