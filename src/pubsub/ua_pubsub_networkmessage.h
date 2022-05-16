@@ -20,6 +20,7 @@ _UA_BEGIN_DECLS
 typedef struct {
     UA_Byte count;
     UA_UInt16* dataSetWriterIds;
+    UA_String* dataSetWriterNames;
 } UA_DataSetPayloadHeader;
 
 /* FieldEncoding Enum  */
