@@ -806,7 +806,7 @@ static UA_StatusCode
 sendNetworkMessageJson(UA_PubSubConnection *connection, UA_DataSetMessage *dsm,
                        UA_UInt16 *writerIds, UA_String *writerNames, UA_Byte dsmCount,
                        UA_ExtensionObject *transportSettings,
-                       UA_DataSetFieldContentMask *dsfConfigMask) {
+                       UA_DataSetFieldContentMask *dsfConfigMask, UA_DataSetMetaDataType **dsmd) {
     /* Prepare the NetworkMessage */
     UA_NetworkMessage nm;
     memset(&nm, 0, sizeof(UA_NetworkMessage));
@@ -821,7 +821,7 @@ sendNetworkMessageJson(UA_PubSubConnection *connection, UA_DataSetMessage *dsm,
     /* Compute the message length */
     UA_Boolean reversibleEncoding = 
         !(UA_Boolean)(*dsfConfigMask & UA_DATASETFIELDCONTENTMASK_RAWDATA);
-    size_t msgSize = UA_NetworkMessage_calcSizeJson(&nm, NULL, 0, NULL, 0, reversibleEncoding);
+    size_t msgSize = UA_NetworkMessage_calcSizeJson(&nm, dsmd[0]->namespaces, dsmd[0]->namespacesSize, NULL, 0, reversibleEncoding);
 
     /* Allocate the buffer. Allocate on the stack if the buffer is small. */
     UA_ByteString buf;
@@ -838,7 +838,7 @@ sendNetworkMessageJson(UA_PubSubConnection *connection, UA_DataSetMessage *dsm,
     /* Encode the message */
     UA_Byte *bufPos = buf.data;
     const UA_Byte *bufEnd = &buf.data[msgSize];
-    res = UA_NetworkMessage_encodeJson(&nm, &bufPos, &bufEnd, NULL, 0, NULL, 0, reversibleEncoding);       
+    res = UA_NetworkMessage_encodeJson(&nm, &bufPos, &bufEnd, dsmd[0]->namespaces, dsmd[0]->namespacesSize, NULL, 0, reversibleEncoding);       
     if(res != UA_STATUSCODE_GOOD)
         goto cleanup;
     UA_assert(bufPos == bufEnd);
@@ -1132,7 +1132,7 @@ static UA_StatusCode
 sendNetworkMessage(UA_DataSetWriter *writer, UA_WriterGroup *writerGroup, 
                    UA_PubSubConnection *connection, UA_DataSetMessage *dsm,
                    UA_UInt16 *writerIds, UA_String *writerName, UA_DataSetFieldContentMask *mask, 
-                   UA_Byte dsmCount) {
+                   UA_Byte dsmCount, UA_DataSetMetaDataType **dsmd) {
     UA_StatusCode res;
     if(writerGroup->config.encodingMimeType == UA_PUBSUB_ENCODING_UADP){
         res = sendNetworkMessageUADP(connection, writerGroup, dsm,
@@ -1144,11 +1144,11 @@ sendNetworkMessage(UA_DataSetWriter *writer, UA_WriterGroup *writerGroup,
         if(writer) {
             res = sendNetworkMessageJson(connection, dsm,
                                      writerIds, writerName, dsmCount,
-                                     &writer->config.transportSettings, mask);
+                                     &writer->config.transportSettings, mask, dsmd);
         } else {
             res = sendNetworkMessageJson(connection, dsm,
                             writerIds, writerName, dsmCount,
-                            &writerGroup->config.transportSettings, mask);
+                            &writerGroup->config.transportSettings, mask, dsmd);
         }
 #else
         res = UA_STATUSCODE_BADNOTSUPPORTED;
@@ -1181,10 +1181,10 @@ allowsBatching(UA_PublishedDataSet *publishedDataSet, UA_Byte maxDSM) {
 
 static UA_INLINE UA_StatusCode
 sendNetworkMessageAndCleanup(UA_WriterGroup *writerGroup, UA_PubSubConnection *connection,
-                             UA_DataSetMessage *dataSetMessage, UA_DataSetWriter *writer) {
+                             UA_DataSetMessage *dataSetMessage, UA_DataSetWriter *writer, UA_DataSetMetaDataType *dsmd) {
     UA_StatusCode res;/* Send right away */
     res = sendNetworkMessage(writer, writerGroup, connection, dataSetMessage,
-        &writer->config.dataSetWriterId, &writer->config.name, &writer->config.dataSetFieldContentMask, (UA_Byte) 1);
+        &writer->config.dataSetWriterId, &writer->config.name, &writer->config.dataSetFieldContentMask, (UA_Byte) 1, &dsmd);
     UA_CHECK_STATUS(res, return res);
     /* Clean up */
     if(writerGroup->config.rtLevel == UA_PUBSUB_RT_DIRECT_VALUE_ACCESS) {
@@ -1200,7 +1200,7 @@ static UA_INLINE size_t
 sendOrCollectDataSetMessage(UA_Server *server, UA_WriterGroup *writerGroup, UA_DataSetWriter *writer,
                             UA_PubSubConnection *connection, UA_Byte maxDSM, UA_UInt16 *dsWriterId,
                             UA_String *dsWriterName, UA_DataSetFieldContentMask *dsWriterFieldMask,
-                            UA_DataSetMessage *dataSetMessage) {
+                            UA_DataSetMessage *dataSetMessage, UA_DataSetMetaDataType *dsmd) {
     if(writer->state != UA_PUBSUBSTATE_OPERATIONAL) {
         return 0;
     }
@@ -1220,7 +1220,7 @@ sendOrCollectDataSetMessage(UA_Server *server, UA_WriterGroup *writerGroup, UA_D
         *dsWriterFieldMask = writer->config.dataSetFieldContentMask;
         return 1;
     } else {
-        res = sendNetworkMessageAndCleanup(writerGroup, connection, dataSetMessage, writer);
+        res = sendNetworkMessageAndCleanup(writerGroup, connection, dataSetMessage, writer, dsmd);
         UA_CHECK_STATUS_ERROR(res, goto error, &server->config.logger, UA_LOGCATEGORY_SERVER,
                               "PubSub Publish: Could not send a NetworkMessage");
         return 0;
@@ -1235,12 +1235,13 @@ sendCollectedDataSetMessagesInBatches(UA_Server *server, UA_WriterGroup *writerG
                                       UA_UInt16 *dsWriterIds, UA_String *dsWriterNames,
                                       UA_DataSetFieldContentMask *masks, UA_DataSetMessage *dataSetMessageBuffer,
                                       size_t collectedDatasetMessageCount,
-                                      UA_Byte maxDSMCount) {/* Send the NetworkMessages with batched DataSetMessages */
+                                      UA_Byte maxDSMCount, UA_DataSetMetaDataType **dataSetMetaDatas) {/* Send the NetworkMessages with batched DataSetMessages */
     size_t cursor, dsmCount;
     FOR_EACH_CHUNK(cursor, dsmCount, maxDSMCount, collectedDatasetMessageCount) {
+        
         UA_StatusCode res = sendNetworkMessage(NULL,
             writerGroup, connection, &dataSetMessageBuffer[cursor], &dsWriterIds[cursor], &dsWriterNames[cursor],
-            &masks[cursor], (UA_Byte) dsmCount);
+            &masks[cursor], (UA_Byte) dsmCount,  &dataSetMetaDatas[cursor]);
 
         if(res != UA_STATUSCODE_GOOD) {
             setErrorStateForDataSetWritersWithIds(server, writerGroup, &dsWriterIds[cursor], dsmCount);
@@ -1255,7 +1256,7 @@ sendCollectedDataSetMessagesInBatches(UA_Server *server, UA_WriterGroup *writerG
 }
 
 #ifdef UA_ENABLE_PUBSUB_MQTT_METADATA
-static void
+static UA_DataSetMetaDataType*
 publishMetadata(UA_Server* server, UA_PubSubConnection* connection, UA_DataSetWriter* dsw) {
     /* Generate the DataSetMetaData */
     UA_PublishedDataSet *pds =
@@ -1264,7 +1265,7 @@ publishMetadata(UA_Server* server, UA_PubSubConnection* connection, UA_DataSetWr
         UA_LOG_ERROR(&server->config.logger, UA_LOGCATEGORY_SERVER,
                         "PubSub Publish: PublishedDataSet not found");
         UA_DataSetWriter_setPubSubState(server, UA_PUBSUBSTATE_ERROR, dsw);
-        return;
+        return NULL;
     }
 
     UA_DataSetMetaData dataSetMetaData;
@@ -1297,6 +1298,8 @@ publishMetadata(UA_Server* server, UA_PubSubConnection* connection, UA_DataSetWr
         UA_ConfigurationVersionDataType_copy(&dsmdt->configurationVersion, &dsw->connectedDataSetVersion);
         UA_DataSetMetaData_clear(&dataSetMetaData);         
     }
+
+    return dsmdt;
 }
 #endif /* UA_ENABLE_PUBSUB_MQTT_METADATA */
 
@@ -1311,24 +1314,26 @@ publishRegular(UA_Server *server, UA_WriterGroup *writerGroup,
     size_t collectedDatasetMessageCount = 0;
     UA_STACKARRAY(UA_UInt16, dsWriterIds, writerGroup->writersCount);
     UA_STACKARRAY(UA_DataSetMessage, dataSetMessageBuffer, writerGroup->writersCount);
+    UA_STACKARRAY(UA_DataSetMetaDataType*, dataSetMetaDatas, writerGroup->writersCount);
     UA_STACKARRAY(UA_String, dsWriterNames, writerGroup->writersCount);
     UA_STACKARRAY(UA_DataSetFieldContentMask, dsWriterFieldMasks, writerGroup->writersCount);
 
     UA_DataSetWriter *writer;
     LIST_FOREACH(writer, &writerGroup->writers, listEntry) {
 #ifdef UA_ENABLE_PUBSUB_MQTT_METADATA
-        publishMetadata(server, connection, writer);
+        dataSetMetaDatas[collectedDatasetMessageCount] = publishMetadata(server, connection, writer);
 #endif /* UA_ENABLE_PUBSUB_MQTT_METADATA */        
         collectedDatasetMessageCount += sendOrCollectDataSetMessage(server, writerGroup, writer, connection,
                                                                     maxDSMCount,
                                                                     &dsWriterIds[collectedDatasetMessageCount],
                                                                     &dsWriterNames[collectedDatasetMessageCount],
                                                                     &dsWriterFieldMasks[collectedDatasetMessageCount],
-                                                                    &dataSetMessageBuffer[collectedDatasetMessageCount]);
+                                                                    &dataSetMessageBuffer[collectedDatasetMessageCount],
+                                                                    dataSetMetaDatas[collectedDatasetMessageCount]);
     }
     sendCollectedDataSetMessagesInBatches(server, writerGroup, connection, dsWriterIds, 
                                           dsWriterNames, dsWriterFieldMasks, dataSetMessageBuffer,
-                                          collectedDatasetMessageCount, maxDSMCount);
+                                          collectedDatasetMessageCount, maxDSMCount, dataSetMetaDatas);
 }
 
 /* This callback triggers the collection and publish of NetworkMessages and the

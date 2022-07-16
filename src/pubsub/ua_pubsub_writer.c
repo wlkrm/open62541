@@ -284,68 +284,106 @@ generateFieldMetaData(UA_Server *server, UA_DataSetField *field,
         fieldMetaData->fieldFlags = UA_DATASETFIELDFLAGS_NONE;
         return UA_STATUSCODE_GOOD;
     }
+    if (var->publishParameters.attributeId == UA_ATTRIBUTEID_VALUE) {    
+        /* Set the Array Dimensions */
+        const UA_PublishedVariableDataType *pp = &var->publishParameters;
+        UA_Variant value;
+        UA_Variant_init(&value);
+        res = UA_Server_readArrayDimensions(server, pp->publishedVariable, &value);
+        UA_CHECK_STATUS_LOG(res, return res,
+                            WARNING, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                            "PubSub meta data generation. Reading the array dimensions failed."); 
 
-    /* Set the Array Dimensions */
-    const UA_PublishedVariableDataType *pp = &var->publishParameters;
-    UA_Variant value;
-    UA_Variant_init(&value);
-    res = UA_Server_readArrayDimensions(server, pp->publishedVariable, &value);
-    UA_CHECK_STATUS_LOG(res, return res,
-                        WARNING, &server->config.logger, UA_LOGCATEGORY_SERVER,
-                        "PubSub meta data generation. Reading the array dimensions failed.");
-
-    if(value.arrayDimensionsSize > 0) {
-        fieldMetaData->arrayDimensions = (UA_UInt32 *)
-            UA_calloc(value.arrayDimensionsSize, sizeof(UA_UInt32));
-        if(!fieldMetaData->arrayDimensions)
-            return UA_STATUSCODE_BADOUTOFMEMORY;
-        memcpy(fieldMetaData->arrayDimensions, value.arrayDimensions,
-               sizeof(UA_UInt32)*value.arrayDimensionsSize);
-    }
-    fieldMetaData->arrayDimensionsSize = value.arrayDimensionsSize;
-
-    /* Set the DataType */
-    res = UA_Server_readDataType(server, pp->publishedVariable,
-                                 &fieldMetaData->dataType);
-    UA_CHECK_STATUS_LOG(res, return res,
-                        WARNING, &server->config.logger, UA_LOGCATEGORY_SERVER,
-                        "PubSub meta data generation. Reading the datatype failed.");
-
-    if(!UA_NodeId_isNull(&fieldMetaData->dataType)) {
-        const UA_DataType *currentDataType =
-            UA_findDataTypeWithCustom(&fieldMetaData->dataType,
-                                      server->config.customDataTypes);
-        if(!currentDataType) {
-            /* TODO: Abstract types are actually allowed, as the value could change
-               its SubDataType. */
-            UA_Variant v;
-            UA_Variant_init(&v);
-            UA_Server_readValue(server, pp->publishedVariable, &v);
-            currentDataType = v.type;
-            UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER, 
-            "MetaData creation error. DataType not found. Could be abstract.");
+        if(value.arrayDimensionsSize > 0) {
+            fieldMetaData->arrayDimensions = (UA_UInt32 *)
+                UA_calloc(value.arrayDimensionsSize, sizeof(UA_UInt32));
+            if(!fieldMetaData->arrayDimensions)
+                return UA_STATUSCODE_BADOUTOFMEMORY;
+            memcpy(fieldMetaData->arrayDimensions, value.arrayDimensions,
+                sizeof(UA_UInt32)*value.arrayDimensionsSize);
         }
-#ifdef UA_ENABLE_TYPEDESCRIPTION
-        UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                     "MetaData creation. Found DataType %s.", currentDataType->typeName);
-#endif
-        /* Check if the datatype is a builtInType, if yes set the builtinType.
-         * TODO: Remove the magic number */
-        if(currentDataType->typeKind <= UA_DATATYPEKIND_ENUM)
-            fieldMetaData->builtInType = (UA_Byte)currentDataType->typeKind;
+        fieldMetaData->arrayDimensionsSize = value.arrayDimensionsSize;
+
+        /* Set the DataType */
+        res = UA_Server_readDataType(server, pp->publishedVariable,
+                                    &fieldMetaData->dataType);
+        UA_CHECK_STATUS_LOG(res, return res,
+                            WARNING, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                            "PubSub meta data generation. Reading the datatype failed.");
+
+        if(!UA_NodeId_isNull(&fieldMetaData->dataType)) {
+            const UA_DataType *currentDataType =
+                UA_findDataTypeWithCustom(&fieldMetaData->dataType,
+                                        server->config.customDataTypes);
+            if(!currentDataType) {
+                /* TODO: Abstract types are actually allowed, as the value could change
+                its SubDataType. */
+                UA_Variant v;
+                UA_Variant_init(&v);
+                UA_Server_readValue(server, pp->publishedVariable, &v);
+                currentDataType = v.type;
+                UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER, 
+                "MetaData creation error. DataType not found. Could be abstract.");
+            }
+    #ifdef UA_ENABLE_TYPEDESCRIPTION
+            UA_LOG_DEBUG(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                        "MetaData creation. Found DataType %s.", currentDataType->typeName);
+    #endif
+            /* Check if the datatype is a builtInType, if yes set the builtinType.
+            * TODO: Remove the magic number */
+            if(currentDataType->typeKind <= UA_DATATYPEKIND_ENUM)
+                fieldMetaData->builtInType = (UA_Byte)currentDataType->typeKind;
+        } else {
+            UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
+                        "PubSub meta data generation. DataType is UA_NODEID_NULL.");
+        }
+
+        /* Set the ValueRank */
+        UA_Int32 valueRank;
+        res = UA_Server_readValueRank(server, pp->publishedVariable, &valueRank);
+        UA_CHECK_STATUS_LOG(res, return res,
+                            WARNING, &server->config.logger, UA_LOGCATEGORY_SERVER,
+                            "PubSub meta data generation. Reading the value rank failed.");
+        fieldMetaData->valueRank = valueRank;
     } else {
-        UA_LOG_WARNING(&server->config.logger, UA_LOGCATEGORY_SERVER,
-                       "PubSub meta data generation. DataType is UA_NODEID_NULL.");
+        fieldMetaData->valueRank = -1;
+        fieldMetaData->arrayDimensionsSize = 0;
+        fieldMetaData->propertiesSize = 0;
+        switch(var->publishParameters.attributeId) {
+            case UA_ATTRIBUTEID_NODEID:
+                fieldMetaData->dataType = UA_TYPES[UA_TYPES_NODEID].typeId;
+                fieldMetaData->builtInType = (UA_Byte) UA_TYPES[UA_TYPES_NODEID].typeKind;
+                break;
+            case UA_ATTRIBUTEID_NODECLASS:
+            case UA_ATTRIBUTEID_BROWSENAME:
+            case UA_ATTRIBUTEID_DISPLAYNAME:
+            case UA_ATTRIBUTEID_DESCRIPTION:
+            case UA_ATTRIBUTEID_WRITEMASK:
+            case UA_ATTRIBUTEID_USERWRITEMASK:
+            case UA_ATTRIBUTEID_ISABSTRACT:
+            case UA_ATTRIBUTEID_SYMMETRIC:
+            case UA_ATTRIBUTEID_INVERSENAME:
+            case UA_ATTRIBUTEID_CONTAINSNOLOOPS:
+            case UA_ATTRIBUTEID_EVENTNOTIFIER:
+            case UA_ATTRIBUTEID_VALUE:
+            case UA_ATTRIBUTEID_DATATYPE:
+            case UA_ATTRIBUTEID_VALUERANK:
+            case UA_ATTRIBUTEID_ARRAYDIMENSIONS:
+            case UA_ATTRIBUTEID_ACCESSLEVEL:
+            case UA_ATTRIBUTEID_USERACCESSLEVEL:
+            case UA_ATTRIBUTEID_MINIMUMSAMPLINGINTERVAL:
+            case UA_ATTRIBUTEID_HISTORIZING:
+            case UA_ATTRIBUTEID_EXECUTABLE:
+            case UA_ATTRIBUTEID_USEREXECUTABLE:
+            case UA_ATTRIBUTEID_DATATYPEDEFINITION:
+            case UA_ATTRIBUTEID_ROLEPERMISSIONS:
+            case UA_ATTRIBUTEID_USERROLEPERMISSIONS:
+            case UA_ATTRIBUTEID_ACCESSRESTRICTIONS:
+            case UA_ATTRIBUTEID_ACCESSLEVELEX:
+            default:
+                break;
+        }
     }
-
-    /* Set the ValueRank */
-    UA_Int32 valueRank;
-    res = UA_Server_readValueRank(server, pp->publishedVariable, &valueRank);
-    UA_CHECK_STATUS_LOG(res, return res,
-                        WARNING, &server->config.logger, UA_LOGCATEGORY_SERVER,
-                        "PubSub meta data generation. Reading the value rank failed.");
-    fieldMetaData->valueRank = valueRank;
-
     /* PromotedField? */
     if(var->promotedField)
         fieldMetaData->fieldFlags = UA_DATASETFIELDFLAGS_PROMOTEDFIELD;
@@ -1552,10 +1590,15 @@ UA_DataSetWriter_generateDataSetMetaData(UA_Server *server,
     UA_DataSetField *dsf;
     size_t dsfnumber = 0;
     TAILQ_FOREACH(dsf, &currentDataSet->fields, listEntry) {
-        UA_KeyValuePair *properties;
-        size_t propertiesCount = UA_PubSubDataSetField_sampleProperties(server, dsf, &properties);
-        dataSetMetaData->dataSetMetaData.fields[dsfnumber].properties = properties;
-        dataSetMetaData->dataSetMetaData.fields[dsfnumber].propertiesSize = propertiesCount;
+        if(dsf->config.field.variable.publishParameters.attributeId == UA_ATTRIBUTEID_VALUE) {
+            UA_KeyValuePair *properties;
+            size_t propertiesCount = UA_PubSubDataSetField_sampleProperties(server, dsf, &properties);
+            dataSetMetaData->dataSetMetaData.fields[dsfnumber].properties = properties;
+            dataSetMetaData->dataSetMetaData.fields[dsfnumber].propertiesSize = propertiesCount;
+        } else {
+            dataSetMetaData->dataSetMetaData.fields[dsfnumber].propertiesSize = 0;
+            dataSetMetaData->dataSetMetaData.fields[dsfnumber].properties = NULL;
+        }
         dsfnumber++;
     }
     return UA_STATUSCODE_GOOD;

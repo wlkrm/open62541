@@ -204,6 +204,7 @@ UA_Server_addPublishedDataSet(UA_Server *server,
     /* Fill the DataSetMetaData */
     result.configurationVersion.majorVersion = UA_PubSubConfigurationVersionTimeDifference();
     result.configurationVersion.minorVersion = UA_PubSubConfigurationVersionTimeDifference();
+  
     switch(newConfig->publishedDataSetType) {
     case UA_PUBSUB_DATASET_PUBLISHEDEVENTS_TEMPLATE:
         res = UA_STATUSCODE_BADNOTSUPPORTED;
@@ -218,6 +219,9 @@ UA_Server_addPublishedDataSet(UA_Server *server,
             UA_PubSubConfigurationVersionTimeDifference();
         newPDS->dataSetMetaData.description = publishedDataSetConfig->config.itemsTemplate.metaData.description;
         newPDS->dataSetMetaData.dataSetClassId = UA_GUID_NULL;
+        newPDS->dataSetMetaData.namespaces = publishedDataSetConfig->config.itemsTemplate.metaData.namespaces;
+        newPDS->dataSetMetaData.namespacesSize = publishedDataSetConfig->config.itemsTemplate.metaData.namespacesSize;
+
         res = UA_String_copy(&newConfig->name, &newPDS->dataSetMetaData.name);
         break;
     case UA_PUBSUB_DATASET_PUBLISHEDITEMS_TEMPLATE:
